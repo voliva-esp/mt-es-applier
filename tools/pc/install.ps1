@@ -6,15 +6,32 @@
 # With options (-Language <code>, -GameDir <folder>, -Check, -Restore, -Force):
 #   & ([scriptblock]::Create((irm https://github.com/Aikiooo/mt-en-applier/releases/download/patch-latest/install.ps1))) -Check
 #
+# The installer first asks the patch language (English, Francais, ... - every
+# language published for the current game build; English unless you picked
+# another one last time). -Language <code> answers it up front (-Language fr).
+# Then it asks whether to also install the redrawn images
+# (logos, banners, buttons, tutorial captions). Text and prefabs install without
+# asking; the images are a separate 23 MB download, fetched only if you say yes,
+# bandwidth. The question defaults to yes, and sixty seconds of silence means
+# yes. Answer it up front instead:
+#   & ([scriptblock]::Create((irm .../install.ps1))) -WithAssets     # yes, no question
+#   & ([scriptblock]::Create((irm .../install.ps1))) -NoImages       # text only, no question
+#   & ([scriptblock]::Create((irm .../install.ps1))) -LanguageOnly   # language bundle only
+# -WithAssets is -Prefabs (the chosen language's text and images in the cached UI
+# bundles, ~63 MB download) plus -FirstLoad (its in-app bundle for the first load's
+# title screen, swapped in per session by Watch-InappSwap.ps1). Either can be used alone.
+#
 # This only fetches the same installer that ships in the zip (Install-EnPatch.ps1
-# + MT.EnPatch.psm1) from the same release and runs it in a child Windows
-# PowerShell with the execution policy bypassed for that one process. So it works
-# on a default Windows install (where scripts are blocked), and an error never
-# closes the window you pasted into. The installer then downloads the patch and
-# checks its size + md5 against version.json, exactly like the zip.
+# + MT.EnPatch.psm1, plus the two helper scripts for -Prefabs/-FirstLoad) from the
+# same release and runs it in a child Windows PowerShell with the execution policy
+# bypassed for that one process. So it works on a default Windows install (where
+# scripts are blocked), and an error never closes the window you pasted into. The
+# installer then downloads the patch and checks its size + md5 against
+# version.json, exactly like the zip.
 
 & {
-    param([string]$GameDir, [string]$Language, [switch]$Force, [switch]$Check, [switch]$Restore)
+    param([string]$GameDir, [string]$Language, [switch]$Force, [switch]$Check, [switch]$Restore,
+          [switch]$Prefabs, [switch]$FirstLoad, [switch]$WithAssets, [switch]$LanguageOnly, [switch]$NoImages)
 
     $ErrorActionPreference = 'Stop'
     # Windows PowerShell 5.1 can default to TLS 1.0; GitHub needs 1.2.
@@ -28,7 +45,7 @@
     try {
         New-Item -ItemType Directory -Force -Path $dir | Out-Null
         Write-Host 'MT-EN: fetching the installer ...'
-        foreach ($f in 'Install-EnPatch.ps1', 'MT.EnPatch.psm1') {
+        foreach ($f in 'Install-EnPatch.ps1', 'MT.EnPatch.psm1', 'Install-PrefabPatch.ps1', 'Watch-InappSwap.ps1') {
             Invoke-WebRequest -UseBasicParsing -Uri "$base/$f" -OutFile (Join-Path $dir $f)
         }
     } catch {
@@ -43,5 +60,10 @@
     if ($Language) { $a += @('-Language', $Language) }
     if ($Check) { $a += '-Check' }
     if ($Restore) { $a += '-Restore' }
+    if ($Prefabs) { $a += '-Prefabs' }
+    if ($FirstLoad) { $a += '-FirstLoad' }
+    if ($WithAssets) { $a += '-WithAssets' }
+    if ($LanguageOnly) { $a += '-LanguageOnly' }
+    if ($NoImages) { $a += '-NoImages' }
     & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') @a
 } @args

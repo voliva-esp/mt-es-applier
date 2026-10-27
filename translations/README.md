@@ -18,10 +18,19 @@ folder:
 <locale>/hand/*.json      the small ID-keyed tables
 ```
 
+`en/prefab/` and `en/textures/` are PC-only: text and images baked into the game's
+UI bundles, used by [`tools/prefab-patch`](../tools/prefab-patch/README.md), not by
+the translation cache. `en/textures/<name>.png` is the English version of the game
+texture with that name. A locale published on PC carries its own
+`prefab/ui-prefab.json` and `textures/` the same way ([`fr/`](fr/README.md) does);
+they are built from that locale's cache and shipped as its `prefab_patch` and
+`prefab_images`.
+
 English (`en`) is the **canonical** set of keys. Every other locale is **sparse**: it
 only carries the lines it translates, and anything missing falls back to English in
 the built patch. That means a new language can land one theme at a time — see
-[`es/README.md`](es/README.md) for a worked example.
+[`es/README.md`](es/README.md) for a worked example. A locale that has translated
+everything simply carries every key — [`fr/`](fr/README.md) does.
 
 ## The files (English)
 
@@ -77,6 +86,40 @@ files under `source/` and `hand/`, keeping the Japanese keys/ids and putting you
 language on the right. Partial files are fine. [`es/README.md`](es/README.md) has the
 details.
 
+To have the locale published on PC as well — its own UI text, images and title
+screen, not just its translated text — give it `prefab/ui-prefab.json` and
+`textures/`, laid out like [`fr/prefab/ui-prefab.json`](fr/prefab/ui-prefab.json)
+and [`fr/textures/`](fr/textures/) do. The maintainer section below builds and
+publishes them.
+
+## Translating images
+
+Images with Japanese lettering (buttons, banners, gacha and event logos, badges,
+tutorial captions) are redrawn per language in `translations/<code>/textures/`:
+
+- One PNG per game texture, named exactly after it (`Icon_Home_Command_Gacha.png`).
+  [`en/textures/`](en/textures/) lists every texture covered today; start from the
+  English file, or from the Japanese original extracted from the game.
+- Keep the game's size. A PNG of another size is stretched to it, without keeping
+  the aspect ratio.
+- Keep the transparency and the art: only the lettering changes. The English set
+  removes the Japanese text, rebuilds the background, then letters the new text in
+  the game's fonts and styles (gradient fill, outline, glow).
+- A missing PNG leaves that texture Japanese for the locale. A PNG named after a
+  texture the game doesn't have is reported by the build and ignored.
+
+The same folder feeds both platforms:
+
+- **PC:** `build_prefab_patch.py --textures translations/<code>/textures` (DXT).
+- **Android:** `build_android_prefabs.py --locale <code>` (ASTC 6×6, from the Android
+  CDN stock, with the menu text of `prefab/ui-prefab.json` and the language's cache),
+  published with `publish_android_images.py --kind prefabs images`. The app offers
+  menus and images for a language once their keys are on the release; menus install
+  unless the player turns them off, images only when the player turns on
+  **Translated images**.
+
+Details: [`tools/prefab-patch/README.md`](../tools/prefab-patch/README.md#textures).
+
 ## For maintainers
 
 Rebuild one locale from these sources:
@@ -127,7 +170,11 @@ powershell -File tools\translations\Publish-Locale.ps1 -Locale es -Publish
 powershell -File tools\translations\Publish-Locale.ps1 -Locale es -PatchFile path\to\__data_es -Stock path\to\android_stock -Publish
 
 # also offer it on PC: an exact-size, CRC-forged bundle for the current PC build
-powershell -File tools	ranslations\Publish-Locale.ps1 -Locale es -PcPatchFile path	o\language-ja_es.bundle -Publish
+powershell -File tools\translations\Publish-Locale.ps1 -Locale es -PcPatchFile path\to\language-ja_es.bundle -Publish
+
+# the whole PC patch, like English: language bundle, UI prefabs + images, title screen
+powershell -File tools\translations\Publish-Locale.ps1 -Locale fr -BuildPcPatch `
+    -PcPrefabDir build\prefab-patch-fr -PcInappBuild build\inapp_assets_all_fr.bundle -Publish
 
 # withdraw a language from the app
 powershell -File tools\translations\Publish-Locale.ps1 -Locale es -Unpublish -Publish
@@ -140,7 +187,26 @@ powershell -File tools\translations\Publish-Locale.ps1 -Locale es -Unpublish -Pu
 - PC: the installer offers a language only when its bundle targets the current PC
   game build (same asset hash as English), and the bundle must be exactly the
   English bundle's size (the PC catalog pins it).
-- The app hides a language's Download once the game updates (the patch's
-  `stock_md5` no longer matches the release's), leaving Auto-patch.
-- `update_translation.py` rewrites `version.json` on every English release, which
-  drops the `locales` block. Re-run `Publish-Locale.ps1` for each language afterwards.
+- PC assets: build `-PcPrefabDir` with `tools/prefab-patch/build_prefab_patch.py`
+  (`--translation-cache` this locale's cache, `--prefab-map
+  translations/<code>/prefab/ui-prefab.json`, `--textures translations/<code>/textures`)
+  and `-PcInappBuild` with `tools/prefab-patch/build_inapp.py`, both from a **stock**
+  cache and game (`Install-PrefabPatch.ps1 -Restore` first): a bundle built from an
+  already patched file is refused on every player's machine. They go under
+  `locales.<code>.pc` as `prefab_patch`, `prefab_images` and `inapp`, and the
+  installer installs them exactly as it does English's. `label` (from
+  `locales.json`) names the launcher: `Play-in-French.cmd`.
+- The installer scripts themselves (`tools/pc/*.ps1`, `MT.EnPatch.psm1`) must be on
+  the release too: older copies ignore everything but the language bundle.
+- After a game update, a language's ready-made patch no longer fits the game: the
+  app's **Install** notices it (it compares the tables' row ids) and builds the
+  translation on the phone instead.
+- After a game update the maintainer's automation adds the update's new lines to
+  `en/` as released, translates them into each published language, commits them
+  here and re-runs `Publish-Locale.ps1`, so French follows each update. A new line
+  that fails its checks stays in English until someone fixes it by hand.
+- The older `update_translation.py` rewrites `version.json` from scratch, which drops
+  the `locales` block, the `images` keys and `cache_md5`; `update_pipeline.py` keeps
+  them. After a release made with the older script, re-run `Publish-Locale.ps1` and
+  `publish_android_images.py` for each language and put back `cache_md5` (see the
+  main README's Releasing section).

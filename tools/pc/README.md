@@ -20,11 +20,40 @@ To check first without changing anything:
 `& ([scriptblock]::Create((irm https://github.com/Aikiooo/mt-en-applier/releases/download/patch-latest/install.ps1))) -Check`
 (`-GameDir 'D:\Games\mushoku_coe_cl'` works the same way if the game isn't found.)
 
+**Fully English on the first load (PC only).** Without the extra pieces, a few
+screens stay Japanese until you go back to the title menu once. Two of them fix
+that: the English text baked into the game's cached UI prefabs, and the English
+in-app bundle the first load's title screen reads. Those install without asking —
+they're what this patch has always done, just more of it.
+
+The **redrawn images** (logos, banners, buttons, badges, tutorial captions) are a
+visible change to the art, so the installer asks about them once the download is
+unpacked:
+
+```
+Also install the English images? (113 bundles: logos, banners, badges,
+tutorial captions; separate 23.2 MB download)
+    [Y] yes (default)   [N] no    ... 60 s
+```
+
+Yes is the default and sixty seconds of silence means yes. Answer it up front
+instead with `-WithAssets` (no question), `-NoImages` (text only), or
+`-LanguageOnly` (language bundle alone). Answering no saves no bandwidth — the
+images are their own download, so answering no saves 23.2 MB and only leaves them Japanese.
+
+In total it adds ~126 MB to the download: 39.5 MB of text bundles, 23.2 MB of images
+image bundles + 61 MB in-app + the language bundle), and because the in-app half
+cannot stay installed — DMM verifies that file before it starts the game, so a
+small watcher swaps it in as the game starts and puts the stock file back on
+exit. The installer starts that watcher for the current session and writes
+**`Play-in-English.cmd`** (`Play-in-French.cmd`, ... for another language;
+`%LOCALAPPDATA%\MT-EN-Applier\pc`) — use it for later sessions, then click Play.
+
 **Or use the ready-to-use zip** (no command line at all):
 
 1. **Download** the zip from the [PC English Patch release](https://github.com/Aikiooo/mt-en-applier/releases) and extract it anywhere.
-2. Double-click **`Install-EnPatch.bat`** — once. It does everything.
-3. Click **Play** in DMM GAME PLAYER and play in English. The language bundle stays patched in the game's cache until the game updates.
+2. Double-click **`Install-EnPatch.bat`** — once. It asks one question (full English UI text? default yes, 60 s), then does everything.
+3. Click **Play** in DMM GAME PLAYER and play in English. The language bundle stays patched in the game's cache until the game updates; if the in-app half was installed, start the game with `Play-in-English.cmd` (or `Play-in-<Language>.cmd`) instead.
 
 Open **`START-HERE.txt`** in the zip — it's the whole guide in plain language.
 (Or read the same guide in your browser: https://www.mtcoe.com/#/en-patch.)
@@ -40,17 +69,19 @@ If the installer can't find the game, pass its folder: `Install-EnPatch.ps1 -Gam
 
 ## What "patched" means here
 
-The PC client checks files in **two different places**, so the patch is two parts:
+The PC client checks files in **three different places**, so the patch is three parts:
 
 | Part | Where it lives | What it does |
 |------|----------------|--------------|
 | **Language bundle** | Unity Addressables **cache** (`…\LocalLow\Unity\GREE Entertainment_クロエコ\…\__data`) | The bulk of the text. An exact-size, CRC-forged English rebuild. |
-| **inapp patch** | `…\StreamingAssets\aa\StandaloneWindows64\inapp_assets_all.bundle` | Remaining in-app strings, swapped in only while the game runs. |
+| **UI prefabs** (`-Prefabs`) | Same Unity cache | ~7,270 strings baked into 243 cached UI bundles, including ~400 labels the game never overwrites (sign-in, data transfer, purchase warnings), plus 137 images with Japanese lettering (gacha and event logos, banners, home buttons, badges, tutorial captions) redrawn in English, in 113 cached bundles. |
+| **in-app patch** (`-FirstLoad`) | `…\StreamingAssets\aa\StandaloneWindows64\inapp_assets_all.bundle` | The first load's title screen, plus 150 baked in-app strings and the title logo. Swapped in only while the game runs. |
 
-Two rules make this work (learned the hard way):
+Three rules make this work (learned the hard way):
 
-1. **Leave the Addressables catalog pristine.** The game validates every bundle against the catalog's pinned `m_BundleSize` and `m_Crc` (a CRC32 of the *decompressed* stream). Editing the catalog — or feeding a bundle whose size/CRC doesn't match — is exactly what produces the **"Failed to acquire resources"** error. The fix is to rebuild the bundle to the stock byte size and forge the matching CRC, then drop it in the cache.
-2. **The language bundle lives in the cache, not in the game files.** The installer seeds it into the Unity Addressables cache (`…\LocalLow\Unity\GREE Entertainment_クロエコ\…\__data`), which DMM's per-launch file verification does not touch — so it stays applied until the game itself refreshes that cache (a title update). If DMM ever repairs or the game updates, just re-run `Install-EnPatch.bat`.
+1. **Leave the Addressables catalog pristine.** The game validates the bundles it *downloads* against the catalog's pinned `m_BundleSize` and `m_Crc` (a CRC32 of the *decompressed* stream) — editing the catalog, or feeding a bundle whose size/CRC doesn't match, is exactly what produces the **"Failed to acquire resources"** error. That is why the language bundle is rebuilt to the stock byte size with a forged CRC. The UI prefabs are a different case: their catalog entries carry `m_UseCrcForCachedBundles: false`, so the cached copies are not verified, and 243 transformed bundles can be dropped in as-is (the builder skips the 76 entries that *are* verified, and says so in `crc-checked.json`).
+2. **The language bundle and the prefabs live in the cache, not in the game files.** The installer seeds them into the Unity Addressables cache (`…\LocalLow\Unity\GREE Entertainment_クロエコ\…\__data`), which DMM's per-launch file verification does not touch — so they stay applied until the game itself refreshes that cache (a title update). If DMM ever repairs or the game updates, just re-run `Install-EnPatch.bat`.
+3. **The in-app bundle cannot stay.** DMM verifies `inapp_assets_all.bundle` before it starts the game, so the English build is staged next to the game folder (`<game>\..\mt-en-staging`, same drive) and swapped in for the session by `Watch-InappSwap.ps1`. Run the watcher before each session (`Play-in-<Language>.cmd`).
 
 ## Requirements
 
@@ -64,8 +95,13 @@ Two rules make this work (learned the hard way):
 2. Run `Install-EnPatch.ps1`. It will:
    - download the language bundle (`language-ja_en.bundle`, or the chosen language's) from `patch-latest` and verify size + md5,
    - seed the language bundle into the Unity cache `__data`,
-   - snapshot clean stock copies (`stock_inapp_assets_all.bundle`, `stock_boot.config`) into `%LOCALAPPDATA%\MT-EN-Applier\pc\` for the wrapper.
+   - snapshot clean stock copies (`stock_inapp_assets_all.bundle`, `stock_boot.config`) into `%LOCALAPPDATA%\MT-EN-Applier\pc\`.
 3. That's it — patching is done. You don't re-run this unless the game updates.
+
+Add `-Prefabs`, `-FirstLoad` or `-WithAssets` (both) to also rewrite the text the
+game ships itself; see the top of this file. With `-FirstLoad` the installer also
+writes `Play-in-<Language>.cmd` (`Play-in-English.cmd`, `Play-in-French.cmd`, ...),
+which is what you start the game with afterwards.
 
 It refuses to install when the game's newest language-pack folder isn't the one the
 patch targets (the game hasn't been launched since an update, or the patch for a new
@@ -75,10 +111,27 @@ overrides.
 ### Other languages
 
 Only languages published for the current game build are offered. With just English
-there's no question; with more, the installer shows a short menu (default: your last
-choice, else your Windows display language, else English) and remembers the answer,
-so re-running after a game update doesn't ask again. Skip the menu with `-Language es`
-(or `& ([scriptblock]::Create((irm …/install.ps1))) -Language es`).
+there's no question; with more, the installer shows a short menu on every run
+(default: your last choice, else your Windows display language, else English) and
+remembers the answer, so re-running after a game update is just Enter (60 seconds of
+silence keeps the default too). Skip the menu with `-Language fr`
+(or `& ([scriptblock]::Create((irm …/install.ps1))) -Language fr`).
+
+Each language installs everything English does: its language bundle, its UI
+prefabs and images, and its in-app title screen with `Play-in-<Language>.cmd`
+(`Play-in-French.cmd`). A part a language has not published yet is skipped, and
+nothing another language left behind stays: switching languages first puts the
+original UI prefabs back, and removes the other language's launcher.
+
+Maintainers publish all of it with `tools/translations/Publish-Locale.ps1`:
+`-BuildPcPatch` builds the language bundle from the released English one
+(`tools/prefab-patch/build_locale_bundle.py`: exact stock size, CRC forged),
+`-PcPrefabDir` takes the `build_prefab_patch.py` tree built with that language's
+cache, `translations/<code>/prefab/ui-prefab.json` and
+`translations/<code>/textures/` (zipped as `prefab-patch-<code>.zip` and
+`prefab-images-<code>.zip`), and `-PcInappBuild` takes its `build_inapp.py` bundle
+(published as `inapp_assets_all_<code>.bundle`). See
+[`translations/README.md`](../../translations/README.md#publishing-a-language-to-the-app).
 
 ## Play
 
@@ -88,15 +141,20 @@ The installer seeds the language bundle into the game's Unity cache — that's t
 
 Some screens only pull their text on the first load. If you see a stray Japanese line, **go back to the title menu and re-enter** — the second load renders fully in English. This matches the Android behaviour (see the root README).
 
+That quirk is PC-fixable: `-WithAssets` rewrites both the cached UI prefabs and the in-app bundle the first load reads. See [`tools/prefab-patch/README.md`](../prefab-patch/README.md).
+
 ## After a game update
 
-A title-update usually refreshes the game's cached language bundle, wiping the patch. Just re-run `Install-EnPatch.ps1` (it re-downloads and re-seeds), then click Play in DMM again.
+A title-update usually refreshes the game's cached language bundle, wiping the patch. Just re-run `Install-EnPatch.ps1` (it re-downloads and re-seeds), then click Play in DMM again. With `-Prefabs`, re-run it the same way once the prefab build for the new game build is published: it only applies a build whose recorded game build matches, and reports the bundles the update replaced.
 
 ## Uninstall (back to Japanese)
 
 - Double-click **`Restore-Japanese.bat`** (or run the installer with `-Restore`). It removes
-  the patched language pack; the game re-downloads the Japanese one on the title screen.
-- Optionally delete `%LOCALAPPDATA%\MT-EN-Applier\pc\` (downloads + stock snapshots).
+  the patched language pack, puts the Japanese UI prefabs back and cleans up any in-app
+  swap left behind; the game re-downloads the Japanese one on the title screen.
+- Optionally delete `%LOCALAPPDATA%\MT-EN-Applier\pc\` — only *after* a successful
+  `-Restore`, since it holds the original bundles the prefab restore needs. `-Restore`
+  also clears `…\mt-en-staging` next to the game folder.
 
 ## Troubleshooting
 
@@ -109,10 +167,12 @@ A title-update usually refreshes the game's cached language bundle, wiping the p
 
 | File | Purpose |
 |------|---------|
-| `install.ps1` | One-line web installer (`irm … \| iex`): fetches the two scripts below from `patch-latest` and runs them. Not in the zip. |
-| `Install-EnPatch.bat` | Double-click installer wrapper (runs the `.ps1`). **Start here.** |
-| `Install-EnPatch.ps1` | One-command installer: download, verify, seed cache, capture stock. `-Language`, `-Check` (report only), `-Restore`. |
+| `install.ps1` | One-line web installer (`irm … \| iex`): fetches the scripts below from `patch-latest` and runs them. Not in the zip. |
+| `Install-EnPatch.bat` | Double-click installer wrapper (runs the `.ps1`; options work, e.g. `Install-EnPatch.bat -WithAssets`). **Start here.** |
+| `Install-EnPatch.ps1` | One-command installer: download, verify, seed cache, capture stock. `-Language`, `-Check` (report only), `-Restore`, `-Prefabs`, `-FirstLoad`, `-WithAssets`. |
+| `Install-PrefabPatch.ps1` | Installs/restores the English UI prefabs in the Unity cache (`-Prefabs`). |
+| `Watch-InappSwap.ps1` | Per-session in-app swap for the first load (`-FirstLoad`); `-RestoreOnly` repairs a crashed swap. |
 | `Restore-Japanese.bat` | Double-click undo: runs the installer with `-Restore`. |
 | `MT.EnPatch.psm1` | Shared constants + functions (cache seeding, download/verify, game detection). |
-| `START-HERE.txt` | The 3-step plain-language guide for non-technical users. |
+| `START-HERE.txt` | The plain-language guide for non-technical users. |
 | `maintainer/` | Maintainer-side builders that produce the release artifacts (PC bundles + `version.json`, and this user zip). |
