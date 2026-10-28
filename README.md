@@ -1,7 +1,7 @@
 # MT-EN Applier
 
-Unofficial **English patch** for *Mushoku Tensei: Chronicle of Echoes*, on Android
-and Windows (DMM).
+Unofficial **English patch** for *Mushoku Tensei: Chronicle of Echoes*, on Android,
+iPhone / iPad and Windows (DMM).
 
 <p align="center"><strong>New here?</strong> The plain-language walkthrough covers every platform with pictures:</p>
 
@@ -9,13 +9,14 @@ and Windows (DMM).
   <a href="https://mtcoe.com/#/en-patch"><img src="https://img.shields.io/badge/%F0%9F%93%96%20Open%20the%20walkthrough-e0b44c?style=flat" alt="📖 Open the walkthrough" width="235"></a>
 </p>
 
-> **Last patch:** 2026-10-09 (v13). See [patch-latest](https://github.com/Aikiooo/mt-en-applier/releases/tag/patch-latest) for the current build.
+> **Last patch:** 2026-10-20 (v17). See [patch-latest](https://github.com/Aikiooo/mt-en-applier/releases/tag/patch-latest) for the current build.
 
 ## Get the patch
 
 | Platform | How | Guide |
 |----------|-----|-------|
 | **Android phone** (no root) | The MT-EN Applier app + Shizuku | [below](#android-phone) |
+| **iPhone / iPad** (no cable, no jailbreak) | A Windows PC on the same Wi-Fi + the free WireGuard app | [below](#iphone--ipad) · [`docs/INSTALL-iOS.md`](docs/INSTALL-iOS.md) |
 | **Windows PC** (DMM GAME PLAYER) | One PowerShell command, or a zip | [below](#windows-pc-dmm) · [`tools/pc/README.md`](tools/pc/README.md) |
 | **Android emulator / rooted / Google Play Games PC** | adb script | [`tools/reapply-en-patch.ps1`](tools/reapply-en-patch.ps1) |
 
@@ -25,7 +26,8 @@ Every platform installs the same translation, from the rolling
 > **Load twice for full translation.** Some screens fetch their text on first load
 > and cache it, so a few lines can stay Japanese the very first time. Go back to the
 > title menu and re-enter; the second load is fully English. This applies to every
-> platform.
+> platform. On **PC** it can be removed entirely with the optional `-WithAssets` step
+> in the Windows section below.
 
 ### Android phone
 
@@ -36,7 +38,7 @@ You need Android 11 or newer and [Shizuku](https://play.google.com/store/apps/de
 2. **Open the game once** to the title screen so it downloads its data, then close it.
 3. **Install `MT-EN-Applier.apk`** from the [latest release](https://github.com/Aikiooo/mt-en-applier/releases/latest)
    and allow the Shizuku permission when asked.
-4. Tap **Download latest patch**, then **Apply English patch**, then launch the game.
+4. Tap **Install English**, then launch the game.
 
 `INSTALL.md` on the release page walks through each step, including Shizuku's pairing.
 
@@ -44,13 +46,43 @@ You need Android 11 or newer and [Shizuku](https://play.google.com/store/apps/de
   APK. v2.4.0 moved to a permanent signing key, so Android can't install it over
   the old one. Your game and patch aren't affected, and later versions install
   over the top. The app now shows a **Get update** banner when a new version is out.
-- **After a game update:** open the app, **Download latest patch**, **Apply**. If no
-  patch for the new game version is out yet, **Auto-patch after update (beta)**
-  rebuilds the translation on the phone (only brand-new text stays Japanese).
-- **Back to Japanese:** **Delete all language packs (reset)**; the game re-downloads
-  the Japanese text.
+- **After a game update:** open the app and tap **Install** again. If no patch for
+  the new game version is out yet, Install builds the translation on the phone in a
+  few seconds instead (Auto-patch; only brand-new text stays Japanese). The **?**
+  next to Install explains this in the app.
+- **Translated menus** (on by default): Install also translates the text built into
+  the game's screens (menus, buttons, windows: about 7,000 labels), in the chosen
+  language (about 35 MB). Turn the **Translated menus** switch off and Install puts
+  the Japanese ones back.
+- **Translated images** (opt-in): turn on the **Translated images** switch and the
+  next Install also replaces the buttons, banners and logos that have Japanese
+  lettering, in the chosen language (about 17 MB).
+- **Advanced:** **Rebuild on this phone (Auto-patch)** forces the on-phone build, and
+  **Install a __data file…** installs a patch file you picked.
+- **Back to Japanese:** **Delete all language packs (reset)** for the text and
+  **Remove translated images** for the images; the game re-downloads the Japanese
+  files at next launch.
 - **Shizuku keeps stopping?** See the troubleshooting section of `INSTALL.md`, and
   tap the status card at the top of the app for **Diagnostics**.
+
+### iPhone / iPad
+
+Free, no cable, no jailbreak: a Windows PC on the same Wi-Fi hands the game English copies
+of its text and image downloads, and the game keeps them. The PC is only needed while the
+game downloads.
+
+1. On the PC, download
+   [`MT-EN-iOS.zip`](https://github.com/Aikiooo/mt-en-applier/releases/download/ios-latest/MT-EN-iOS.zip),
+   extract it and double-click **Installer-iOS.bat**. A page opens with the steps.
+2. On the iPhone, install the free **[WireGuard](https://apps.apple.com/app/wireguard/id1441195209)**
+   app and scan the page's QR code; then scan the second code and trust the certificate
+   (once).
+3. Open the game, title menu › **Delete local data** (account and progress stay). The game
+   downloads its files again, in English. Then switch the tunnel off and close the PC window.
+
+[`docs/INSTALL-iOS.md`](docs/INSTALL-iOS.md) walks through every tap. The title-screen menu
+and first-load tips live inside the app, which iOS doesn't let anyone change: load twice.
+Maintainers: [`tools/ios/README.md`](tools/ios/README.md).
 
 ### Windows PC (DMM)
 
@@ -62,6 +94,19 @@ irm https://github.com/Aikiooo/mt-en-applier/releases/download/patch-latest/inst
 
 Then click **Play** in DMM GAME PLAYER. Re-run the same command after a game update.
 
+- **Fully English on the first load (default, PC only).** The text the game itself
+  ships — the cached UI prefabs and the in-app bundle behind the first-load title
+  screen — installs without asking; that's what the patch has always done, just
+  more of it. The **redrawn images** (logos, banners, buttons, badges, tutorial
+  captions) are the one thing it asks about, because they change the art:
+  yes is the default, and so is 60 seconds of silence. They arrive inside the same
+  a separate 23.2 MB download, fetched only if they say yes, so answering no saves it.
+  `-WithAssets` answers yes up front, `-NoImages` and `-LanguageOnly` say no.
+  Because the in-app half can't stay installed (DMM verifies that file before
+  launching), a small watcher swaps it in per session: start the game with
+  `Play-in-English.cmd` (`Play-in-French.cmd`, ... in another language), then click Play.
+  Every published language ships all of it, not only its text.
+  **[`tools/pc/README.md`](tools/pc/README.md)** has the details.
 - **No terminal?** Download the zip from the [PC English Patch release](https://github.com/Aikiooo/mt-en-applier/releases/tag/pc-v1),
   extract it and double-click `Install-EnPatch.bat`. `START-HERE.txt` inside is the
   whole guide.
@@ -72,8 +117,10 @@ Then click **Play** in DMM GAME PLAYER. Re-run the same command after a game upd
 
 ## Languages
 
-English is the only published language today; a **Spanish** translation is in
-progress. The translation lives in [`translations/`](translations/) as readable,
+English is the only published language today. A **French** translation is complete
+and ready to publish (PC, everything English has: `Publish-Locale.ps1 -Locale fr -BuildPcPatch
+-PcPrefabDir … -PcInappBuild …`); a
+**Spanish** one is in progress. The translation lives in [`translations/`](translations/) as readable,
 one-line-per-entry files, so anyone can suggest a fix or translate into another
 language with a normal pull request. [`translations/README.md`](translations/README.md)
 explains how.
@@ -95,10 +142,71 @@ service. It force-stops the game, finds every live language bundle (`__data`) un
 folder changes with updates, and a mirror lives under `files/il2cpp/`), copies the
 patch over each, and checks the size on the device.
 
-- **Download** reads `version.json` on `patch-latest` and verifies the patch's size and md5.
-- **Auto-patch (beta)** takes the AES keys from the game's own `global-metadata.dat`
+- **Install** reads `version.json` on `patch-latest`, downloads the selected language's
+  patch and verifies its size and md5, checks it against the game (below) and copies
+  it. With no patch published for the language, or none that fits, it runs Auto-patch.
+- **Auto-patch** takes the AES keys from the game's own `global-metadata.dat`
   (offsets from `version.json`), decrypts the new bundle, overlays the translation
-  cache and rebuilds it on the phone (`core/AutoPatcher`).
+  cache and rebuilds it on the phone (`core/AutoPatcher`). The status card shows its
+  progress. Details below.
+- **Translated menus** (on by default) and **translated images** (opt-in) overwrite
+  the game's cached UI bundles with the release's per-language build. Details below.
+
+**The shell can overwrite the game's cache files but not delete them.** The cache
+folders are `drwxr-s---` (owner: the game, group `ext_data_rw`) and the files
+`rw-rw----`, so the shell uid (in `ext_data_rw`) can write a file but not unlink it.
+To make the game download a bundle again, the app empties that entry's `__info`
+(Unity's cache record, `-1 / timestamp / 1 / __data`): Unity then treats the entry
+as not cached and downloads it at next launch. Reset, Remove translated images and
+Auto-patch's "open the game once" fallback all work this way.
+
+**Auto-patch always translates from Japanese.** The translation cache matches
+Japanese text, so patching an already patched bundle changes almost nothing. Before
+patching, it counts the Japanese text cells of the source (`AutoPatcher.Result
+.sourceIsJapanese()`: the stock bundle is ~99% Japanese, a patched one ~0%):
+
+1. It keeps a copy of the Japanese bundle whenever it sees one (`original_ja.__data`
+   in the app's files, also taken by Install before it overwrites the stock bundle).
+2. When the game holds a patch (this app's or another), it starts from that copy if
+   the copy holds the same table rows as the game's pack, i.e. the same game version
+   (`AutoPatcher.rowIds`; row ids don't depend on the language).
+3. Otherwise it empties the language entries' `__info` and asks the player to open
+   the game once (it downloads its Japanese pack), close it and tap Install again.
+   The app never opens the game by itself.
+
+**Install falls back to Auto-patch after a game update.** Before copying, Install
+decrypts the patch and the game's live language pack and compares the row ids of
+every table (`AutoPatcher.rowIds`, about a second on a phone). Row ids are the same
+in every language, so they differ only when the game data changed: then the game
+has updated since the patch was published, and Install runs Auto-patch instead of
+installing a patch that lacks the new rows. File sizes can't tell this: a patch
+doesn't have to keep the stock size.
+
+When a translated table is too long for its ciphertext, rows go back to Japanese,
+longest first. The patcher sizes that by arithmetic (the plaintext length is the sum
+of its rows) and encrypts once, so the whole patch takes about half a second on a PC.
+
+**Translated menus and images.** The game caches its UI bundles like the language
+pack, at `UnityCache/Shared/<name folder>/<version folder>/__data`. The name folder is
+the same as on PC; only the version folder differs. Two zips per language on the
+release, each holding the patched bundles under their name folder plus a manifest with
+the stock (`src_md5`) and patched (`out_md5`) md5:
+
+- `android-prefabs-<code>.zip`: the text built into 243 UI prefabs (TextMeshPro `m_text`),
+  the same ~7,270 strings as the PC patch. Installed unless the player turns
+  **Translated menus** off.
+- `android-images-<code>.zip`: 113 bundles with redrawn textures (ASTC 6×6). The 3 of
+  them that also carry menu text have the text too, so the image copy replaces the
+  text copy instead of undoing it. Installed when **Translated images** is on.
+
+The app installs menus first, then images. It overwrites a cached copy only when it is
+stock or a bundle it wrote itself (either kind, any language), so switching languages
+works and a bundle the game updated stays Japanese. Switching to a language without a
+kind, or turning menus off, takes the previous copy away rather than mixing languages.
+**Remove translated images** puts the text-only copy back on the 3 shared bundles.
+Both zips are built from the game's Android CDN stock by
+[`tools/prefab-patch/build_android_prefabs.py`](tools/prefab-patch/build_android_prefabs.py);
+see [`tools/prefab-patch/README.md`](tools/prefab-patch/README.md#android-menus-and-images).
 - **Update check** looks for the highest `vX.Y.Z` GitHub release carrying `MT-EN-Applier.apk`.
 
 The APK contains no game data and no encryption keys.
@@ -113,7 +221,8 @@ gradlew.bat assembleRelease   :: app\build\outputs\apk\release\app-release.apk (
 AGP 9.3.0 / Gradle 9.5.1, Java 17 bytecode, `compileSdk 37`, `minSdk 26`. The UI is
 plain Java with no UI libraries. Dependencies: the vendored Shizuku API client
 (`rikka.shizuku.*`, `moe.shizuku.*` AIDL; MIT, © RikkaApps), `hiddenapibypass` for
-hidden-API access on Android 9+, and `lz4-java` for the auto-patcher.
+hidden-API access on Android 9+, and `lz4-java` plus `org.tukaani:xz` (LZMA blocks)
+for the auto-patcher.
 
 Release builds are signed with the project key, which lives **outside the repo**
 (`~/.android/mt-en-applier-release.properties`, or `-PmtReleaseProps=<path>`).
@@ -132,12 +241,26 @@ or users can't update over their installed copy.
 - **Patch:** the English patch (`__data`, `version.json`, `translation_cache.json`, PC
   bundles) is published to `patch-latest` by the maintainer pipeline;
   [`tools/pc/maintainer/Publish-PcPatch.ps1`](tools/pc/maintainer/Publish-PcPatch.ps1)
-  adds the PC block.
+  adds the PC block — the language bundle, the in-app bundle with the stock metadata
+  the swap watcher needs, and `prefab-patch.zip` (it verifies that build against the
+  local game cache before uploading).
 - **PC installer:** [`tools/pc/maintainer/Build-PcZip.ps1`](tools/pc/maintainer/Build-PcZip.ps1) `-Publish`
   uploads the zip and the one-line installer together, so both always run the same scripts.
 - **Other languages:** [`tools/translations/Publish-Locale.ps1`](tools/translations/Publish-Locale.ps1)
   (see [`translations/README.md`](translations/README.md#publishing-a-language-to-the-app)).
   Re-run it after each English release, which rewrites `version.json`.
+- **Android menus and images:** [`tools/prefab-patch/publish_android_images.py`](tools/prefab-patch/publish_android_images.py)
+  `--locale <code> --kind prefabs images --publish` (English included). Re-run it after
+  each English release too.
+- **After a game update:** the maintainer's automation builds and publishes the English
+  pack, adds the update's new lines to `translations/en/`, translates them for each
+  published language (French today), commits them here, and re-runs the two steps
+  above plus the `cache_md5` stamp below. It then rebuilds the iOS patch and the
+  Android menus and images from the new CDN stock and publishes them. The PC UI
+  prefabs and images still need a manual rebuild.
+- **English cache:** `version.json` must carry a top-level `cache_md5` (the md5 of
+  `translation_cache.json`). The app re-downloads its cache only when that stamp
+  changes, so a cache uploaded without it never reaches the phones that have one.
 
 ### Roadmap
 
@@ -145,6 +268,10 @@ or users can't update over their installed copy.
 - Keep the `locales` block of `version.json` when the English release is republished.
 - Server-side auto-build on game updates (GitHub Actions / watcher), so `patch-latest`
   refreshes without a manual run.
+- Textures for events newer than the redrawn set (e.g. the current pickup banners), and
+  the title logo on Android, which lives inside the game's APK.
+- Android first-load fix: the in-app bundle there lives inside the APK, so the PC
+  approach (swap the StreamingAssets copy at launch) doesn't transfer.
 
 ## Legal / disclaimer
 

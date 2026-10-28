@@ -1,12 +1,16 @@
 package com.mtpatch.enapply;
 
+import android.animation.ObjectAnimator;
+import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.app.Dialog;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.content.res.ColorStateList;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
@@ -21,7 +25,9 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
 
 import java.io.File;
@@ -30,6 +36,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import com.mtpatch.enapply.core.AutoPatcher;
 import com.mtpatch.enapply.core.JsonMap;
@@ -61,7 +68,7 @@ public class MainActivity extends Activity {
 
     /** Fallback only: the live patch_size comes from version.json (see
      *  expectedPatchSize()), so size changes never require an app update. */
-    private static final long DEFAULT_EXPECTED_SIZE = 1898964L;
+    private static final long DEFAULT_EXPECTED_SIZE = 1920809L;
 
     /** Fallback only: the live meta_key_off / meta_iv_off come from version.json.
      *  These move with game updates, so using them triggers a loud warning. */
@@ -87,7 +94,7 @@ public class MainActivity extends Activity {
     private static final String APK_ASSET = "MT-EN-Applier.apk";
 
     private static final String AUTO_PATCH_ADVICE =
-            "Use \"Download latest patch\" once a build is published for this game version.";
+            "Tap Install again once a patch is published for this game version.";
 
     // ---------------- palette (dark) ----------------
     private static final int C_BG = 0xFF121417;
@@ -118,6 +125,25 @@ public class MainActivity extends Activity {
     /** md5 of the last bundle Auto-patch wrote: matches neither the published
      *  patch nor stock, so the live check must not call it "game updated". */
     private static final String PREF_AUTOPATCH_MD5 = "autopatch_md5";
+    /** md5 of the Japanese bundle the last Auto-patch was built from. */
+    private static final String PREF_AUTOPATCH_BASE = "autopatch_base_md5";
+    /** md5 of the saved Japanese original (originalJa()), "" = none. */
+    private static final String PREF_ORIGINAL_MD5 = "original_ja_md5";
+    /** The player opted in to translated images (off by default). */
+    private static final String PREF_IMAGES = "images_optin";
+    /** Language of the images in the game's cache, "" = Japanese (ours not installed). */
+    private static final String PREF_IMAGES_LANG = "images_lang";
+    /** md5s of every image bundle this app wrote (comma-separated), any language:
+     *  a cached bundle may only be overwritten when it is stock or one of these. */
+    private static final String PREF_IMAGES_WRITTEN = "images_written";
+    /** Name folders of the image bundles of the installed set (comma-separated). */
+    private static final String PREF_IMAGES_BUNDLES = "images_bundles";
+    /** Translated menu text (UI prefabs), on unless the player turned it off. */
+    private static final String PREF_PREFABS = "prefabs_on";
+    /** The same three as for the images, for the menu-text bundles. */
+    private static final String PREF_PREFABS_LANG = "prefabs_lang";
+    private static final String PREF_PREFABS_WRITTEN = "prefabs_written";
+    private static final String PREF_PREFABS_BUNDLES = "prefabs_bundles";
     private static final String STAGED_CUSTOM = "custom";
 
     /** Languages published on the release (English first), from version.json. */
@@ -131,8 +157,15 @@ public class MainActivity extends Activity {
     private ScrollView logScroll;
     private final ArrayDeque<String> logLines = new ArrayDeque<>();
     private TextView statusText, statusHint;
+    private ProgressBar progressBar;
+    private View statusDotView;
+    private ObjectAnimator dotPulse;
+    private LinearLayout imagesRow, prefabsRow;
+    private Switch imagesSwitch, prefabsSwitch;
+    private TextView imagesHint, prefabsHint;
+    private Button removeImagesBtn;
     private GradientDrawable statusDot;
-    private Button applyBtn, uninstallBtn, pickBtn, shizukuBtn, shizukuGithubBtn, downloadBtn, autoBtn, resetBtn;
+    private Button applyBtn, uninstallBtn, pickBtn, shizukuBtn, shizukuGithubBtn, autoBtn, resetBtn;
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     private volatile IUserService service;
@@ -143,6 +176,11 @@ public class MainActivity extends Activity {
     private volatile boolean busy = false;
     /** Sticky status label after a successful install (null = none yet). */
     private volatile String doneLabel = null;
+    /** Auto-patch progress 0..100 shown on the status card, -1 = none. */
+    private volatile int progressPct = -1;
+    private volatile String progressPhase = "";
+    /** What the running operation is, for the status card ("Applying patch…"). */
+    private volatile String busyLabel = "Working…";
 
     /** md5 of the newest live bundle from the last read-only check: null = not
      *  checked / unknown, "" = no live bundle, else 32 hex chars. */
@@ -284,6 +322,7 @@ public class MainActivity extends Activity {
         dotView.setLayoutParams(dotLp);
         dotView.setBackground(statusDot);
         statusCard.addView(dotView);
+        statusDotView = dotView;
 
         LinearLayout statusTexts = new LinearLayout(this);
         statusTexts.setOrientation(LinearLayout.VERTICAL);
@@ -296,6 +335,15 @@ public class MainActivity extends Activity {
         statusHint.setTextSize(13);
         statusHint.setTextColor(C_TEXT_DIM);
         statusTexts.addView(statusHint);
+        progressBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progressBar.setMax(100);
+        progressBar.setProgressTintList(ColorStateList.valueOf(C_ACCENT));
+        progressBar.setIndeterminateTintList(ColorStateList.valueOf(C_ACCENT));
+        progressBar.setVisibility(View.GONE);
+        LinearLayout.LayoutParams barLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(6));
+        barLp.setMargins(0, dp(8), 0, 0);
+        statusTexts.addView(progressBar, barLp);
         statusCard.addView(statusTexts, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
@@ -343,15 +391,27 @@ public class MainActivity extends Activity {
         langLp.topMargin = dp(8);
         root.addView(langRow, langLp);
 
-        // ---- actions (own scroll region; never pushed around by the log) ----
-        ScrollView actionsScroll = new ScrollView(this);
-        actionsScroll.setVerticalScrollBarEnabled(false);
+        // ---- translated menus (on by default) and images (opt-in), shown once published ----
+        prefabsRow = switchRow("Translated menus", PREF_PREFABS, true, on -> log(on
+                ? "Translated menus: on. They are installed with the next Install."
+                : "Translated menus: off. The next Install puts the Japanese menus back."));
+        prefabsHint = (TextView) prefabsRow.getTag();
+        prefabsSwitch = (Switch) prefabsRow.getChildAt(1);
+        root.addView(prefabsRow, rowLp());
+        imagesRow = switchRow("Translated images", PREF_IMAGES, false, on -> log(on
+                ? "Translated images: on. They are installed with the next Install."
+                : "Translated images: off. Images already installed stay until you tap "
+                        + "\"Remove translated images\" or switch language."));
+        imagesHint = (TextView) imagesRow.getTag();
+        imagesSwitch = (Switch) imagesRow.getChildAt(1);
+        root.addView(imagesRow, rowLp());
+
+        // ---- actions (the whole screen scrolls) ----
         LinearLayout actions = new LinearLayout(this);
         actions.setOrientation(LinearLayout.VERTICAL);
-        actions.setPadding(0, dp(4), 0, dp(12));
-        actionsScroll.addView(actions);
-        root.addView(actionsScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+        actions.setPadding(0, dp(4), 0, dp(16));
+        root.addView(actions, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         // Shizuku helpers: visibility/label driven by refreshStatus().
         shizukuBtn = makeButton("Get Shizuku (Play Store)", BTN_SECONDARY, v -> {
@@ -375,22 +435,39 @@ public class MainActivity extends Activity {
         });
         actions.addView(shizukuGithubBtn);
 
-        applyBtn = makeButton("Apply English patch", BTN_PRIMARY, v -> onApply());
-        actions.addView(applyBtn);
-
-        downloadBtn = makeButton("Download latest patch", BTN_SECONDARY, v -> onDownload());
-        actions.addView(downloadBtn);
-
-        pickBtn = makeButton("Choose __data file…", BTN_SECONDARY, v -> openPicker());
-        actions.addView(pickBtn);
+        // One button does it all: download the published patch, check it against the
+        // game, and build the translation here (Auto-patch) when it doesn't fit.
+        LinearLayout installRow = new LinearLayout(this);
+        installRow.setOrientation(LinearLayout.HORIZONTAL);
+        applyBtn = makeButton("Install English", BTN_PRIMARY, v -> onInstall());
+        installRow.addView(applyBtn, new LinearLayout.LayoutParams(0, dp(56), 1f));
+        Button installHelp = makeButton("?", BTN_SECONDARY, v -> showInstallHelp());
+        installHelp.setPadding(0, 0, 0, 0);
+        installHelp.setTextSize(17);
+        installHelp.setTypeface(Typeface.DEFAULT_BOLD);
+        installHelp.setContentDescription("How does Install work?");
+        LinearLayout.LayoutParams helpLp = new LinearLayout.LayoutParams(dp(56), dp(56));
+        helpLp.leftMargin = dp(8);
+        installRow.addView(installHelp, helpLp);
+        LinearLayout.LayoutParams installLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        installLp.topMargin = dp(12);
+        actions.addView(installRow, installLp);
 
         actions.addView(sectionCaption("Advanced"));
+
+        autoBtn = makeButton("Rebuild on this phone (Auto-patch)", BTN_SECONDARY, v -> onAutoPatch());
+        actions.addView(autoBtn);
+
+        pickBtn = makeButton("Install a __data file…", BTN_SECONDARY, v -> openPicker());
+        actions.addView(pickBtn);
 
         resetBtn = makeButton("Delete all language packs (reset)", BTN_DANGER, v -> onResetLangPacks());
         actions.addView(resetBtn);
 
-        autoBtn = makeButton("Auto-patch after update (beta)", BTN_SECONDARY, v -> onAutoPatch());
-        actions.addView(autoBtn);
+        removeImagesBtn = makeButton("Remove translated images", BTN_DANGER, v -> onRemoveImages());
+        removeImagesBtn.setVisibility(View.GONE);
+        actions.addView(removeImagesBtn);
 
         uninstallBtn = makeButton("Uninstall this app", BTN_QUIET, v -> requestUninstall());
         uninstallBtn.setVisibility(View.GONE);
@@ -427,10 +504,16 @@ public class MainActivity extends Activity {
         logText.setPadding(dp(10), dp(8), dp(10), dp(8));
         logText.setTextIsSelectable(true);
         logScroll.addView(logText);
+        logScroll.setNestedScrollingEnabled(true);   // scrolls inside the page's scroll
         root.addView(logScroll, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, dp(170)));
+                ViewGroup.LayoutParams.MATCH_PARENT, dp(260)));
 
-        setContentView(root);
+        ScrollView page = new ScrollView(this);
+        page.setBackgroundColor(C_BG);
+        page.setFillViewport(true);
+        page.setVerticalScrollBarEnabled(false);
+        page.addView(root);
+        setContentView(page);
         initLanguages();
         checkForAppUpdate();
         refreshStatus();
@@ -579,20 +662,14 @@ public class MainActivity extends Activity {
         ui.post(() -> {
             boolean connected = isConnected();
             boolean installed = isShizukuInstalled();
-            File patch = localPatch();
-            boolean fileThere = patch != null && patch.exists();
             PatchLanguage lang = selectedLanguage();
-            String staged = stagedLangCode();
-            boolean customFile = STAGED_CUSTOM.equals(staged);
-            // A staged file of another language must not be applied by mistake.
-            boolean havePatch = fileThere && (customFile || staged.equals(lang.code));
 
             // Language picker: hidden while only English is published.
             langRow.setVisibility(languages.size() > 1 ? View.VISIBLE : View.GONE);
             langRow.setEnabled(!busy);
             langRow.setAlpha(busy ? 0.5f : 1f);
             langValue.setText(lang.name + "  ▾");
-            langHint.setText(lang.downloadable() ? "" : "No ready-made download yet: use Auto-patch");
+            langHint.setText(lang.downloadable() ? "" : "Built on this phone: no ready-made download");
             langHint.setVisibility(lang.downloadable() ? View.GONE : View.VISIBLE);
 
             // Shizuku helpers: connected -> none; installed -> one "Open Shizuku";
@@ -601,13 +678,35 @@ public class MainActivity extends Activity {
             shizukuBtn.setText(installed ? "Open Shizuku" : "Get Shizuku (Play Store)");
             shizukuGithubBtn.setVisibility(!connected && !installed ? View.VISIBLE : View.GONE);
 
-            applyBtn.setText(customFile && fileThere ? "Apply chosen file"
-                    : lang.isDefault() ? "Apply English patch" : "Apply patch · " + lang.name);
-            applyBtn.setEnabled(!busy && connected && havePatch);
-            downloadBtn.setEnabled(!busy && lang.downloadable());
-            pickBtn.setEnabled(!busy);
+            applyBtn.setText("Install " + lang.name);
+            applyBtn.setEnabled(!busy && connected);
+            pickBtn.setEnabled(!busy && connected);
             resetBtn.setEnabled(!busy && connected);
             autoBtn.setEnabled(!busy && connected);
+            progressBar.setVisibility(busy ? View.VISIBLE : View.GONE);
+            progressBar.setIndeterminate(progressPct < 0);
+            if (progressPct >= 0) progressBar.setProgress(progressPct);
+
+            boolean anyPrefabs = false;
+            for (PatchLanguage l : languages) anyPrefabs |= l.hasPrefabs();
+            prefabsRow.setVisibility(anyPrefabs ? View.VISIBLE : View.GONE);
+            prefabsSwitch.setEnabled(!busy);
+            prefabsHint.setText(lang.hasPrefabs()
+                    ? "Menus, buttons and windows · " + (lang.prefabsSize > 0
+                            ? String.format(Locale.US, "%.0f MB", lang.prefabsSize / 1e6) : "download")
+                    : "None for " + lang.name + " yet");
+
+            boolean anyImages = false;
+            for (PatchLanguage l : languages) anyImages |= l.hasImages();
+            imagesRow.setVisibility(anyImages ? View.VISIBLE : View.GONE);
+            imagesSwitch.setEnabled(!busy);
+            imagesHint.setText(lang.hasImages()
+                    ? "Buttons, banners and logos · " + (lang.imagesSize > 0
+                            ? String.format(Locale.US, "%.0f MB", lang.imagesSize / 1e6) : "download")
+                    : "None for " + lang.name + " yet");
+            String imgLang = prefs().getString(PREF_IMAGES_LANG, "");
+            removeImagesBtn.setVisibility(anyImages || !imgLang.isEmpty() ? View.VISIBLE : View.GONE);
+            removeImagesBtn.setEnabled(!busy && connected);
 
             if (!connected) {
                 if (!installed) {
@@ -617,46 +716,57 @@ public class MainActivity extends Activity {
                 } else {
                     setStatus(C_ERR, "Shizuku not running", "Open Shizuku and tap Start.");
                 }
+            } else if (busy && progressPct >= 0) {
+                setStatus(C_ACCENT, busyLabel + " " + progressPct + "%", progressPhase);
             } else if (busy) {
-                setStatus(C_WARN, "Working…", "See the log below.");
+                setStatus(C_ACCENT, busyLabel, progressPhase.isEmpty() ? "See the log below." : progressPhase);
             } else if (doneLabel != null) {
-                setStatus(C_OK, doneLabel, "Launch the game. Re-apply after each game update.");
+                setStatus(C_OK, doneLabel, "Launch the game. Tap Install again after each game update.");
             } else if (liveState(lang) == LIVE_PATCHED) {
                 setStatus(C_OK, "Patch installed", "Launch the game.");
             } else if (liveState(lang) == LIVE_OUTDATED) {
-                setStatus(C_WARN, "Older patch installed",
-                        "Tap Download latest patch, then Apply.");
+                setStatus(C_WARN, "Older patch installed", "Tap Install to update it.");
             } else if (liveState(lang) == LIVE_UPDATED) {
-                setStatus(C_WARN, "Game updated — patch not out yet",
-                        "Use Auto-patch (beta), or wait for the new patch.");
-            } else if (havePatch) {
-                setStatus(C_OK, "Ready — tap Apply", "Patch file: "
-                        + (customFile ? "chosen file" : lang.name) + ", " + fmtBytes(patch.length()));
-            } else if (!lang.downloadable()) {
-                setStatus(C_WARN, "No " + lang.name + " download yet",
-                        "Use Auto-patch (beta) to build it on this phone.");
-            } else if (fileThere) {
-                setStatus(C_WARN, "No " + lang.name + " patch file yet",
-                        "Download it, or switch the patch language back.");
+                setStatus(C_WARN, "Game updated", "Tap Install to translate it again.");
             } else {
-                setStatus(C_WARN, "No patch file yet", "Download the latest patch or choose a __data file.");
+                setStatus(C_ACCENT, "Not installed yet", "Tap Install " + lang.name + ".");
             }
         });
     }
 
     private void setBusy(boolean b) {
         busy = b;
+        ui.post(() -> {
+            // a slow pulse on the status dot while something runs
+            if (b && dotPulse == null) {
+                dotPulse = ObjectAnimator.ofFloat(statusDotView, View.ALPHA, 1f, 0.25f);
+                dotPulse.setDuration(700);
+                dotPulse.setRepeatMode(ValueAnimator.REVERSE);
+                dotPulse.setRepeatCount(ValueAnimator.INFINITE);
+                dotPulse.start();
+            } else if (!b && dotPulse != null) {
+                dotPulse.cancel();
+                dotPulse = null;
+                statusDotView.setAlpha(1f);
+            }
+        });
         refreshStatus();
     }
 
-    /** Claim the busy flag on the UI thread; false if another operation is running. */
-    private boolean tryBegin() {
+    /** Claim the busy flag on the UI thread; false if another operation is running.
+     *  The label names the operation on the status card while it runs. */
+    private boolean tryBegin(String label) {
         if (busy) return false;
+        busyLabel = label;
+        progressPct = -1;
+        progressPhase = "";
         setBusy(true);
         return true;
     }
 
     private void end() {
+        progressPct = -1;
+        progressPhase = "";
         setBusy(false);
         checkLiveBundle();
     }
@@ -779,26 +889,97 @@ public class MainActivity extends Activity {
         List<PatchLanguage> langs = languages;
         if (busy || langs.size() < 2) return;
         String current = selectedLanguage().code;
-        String[] labels = new String[langs.size()];
-        int checked = 0;
-        for (int i = 0; i < langs.size(); i++) {
-            PatchLanguage l = langs.get(i);
-            labels[i] = l.downloadable() ? l.name : l.name + "  (Auto-patch only)";
-            if (l.code.equals(current)) checked = i;
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        Dialog[] sheet = new Dialog[1];
+        for (PatchLanguage l : langs) {
+            boolean sel = l.code.equals(current);
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(14), dp(12), dp(14), dp(12));
+            row.setBackground(new RippleDrawable(ColorStateList.valueOf(0x22FFFFFF),
+                    rounded(sel ? C_SURFACE_HI : C_BG, sel ? C_ACCENT : C_STROKE, 12), null));
+            LinearLayout texts = new LinearLayout(this);
+            texts.setOrientation(LinearLayout.VERTICAL);
+            TextView name = new TextView(this);
+            name.setText(l.name);
+            name.setTextSize(16);
+            name.setTypeface(Typeface.DEFAULT_BOLD);
+            name.setTextColor(sel ? C_ACCENT : C_TEXT);
+            texts.addView(name);
+            TextView sub = new TextView(this);
+            sub.setText((l.downloadable() ? "Ready-made download" : "Built on this phone with Auto-patch")
+                    + (l.hasPrefabs() ? " · menus" : "") + (l.hasImages() ? " · images" : ""));
+            sub.setTextSize(12);
+            sub.setTextColor(C_TEXT_DIM);
+            texts.addView(sub);
+            row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+            if (sel) {
+                TextView check = new TextView(this);
+                check.setText("✓");
+                check.setTextSize(18);
+                check.setTextColor(C_ACCENT);
+                row.addView(check);
+            }
+            row.setOnClickListener(v -> {
+                sheet[0].dismiss();
+                if (l.code.equals(current)) return;
+                prefs().edit().putString(PREF_LANG, l.code).apply();
+                doneLabel = null;
+                log("Patch language: " + l.name + ".");
+                refreshStatus();
+            });
+            LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+            rlp.topMargin = dp(8);
+            list.addView(row, rlp);
         }
-        new android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-                .setTitle("Patch language")
-                .setSingleChoiceItems(labels, checked, (d, which) -> {
-                    PatchLanguage l = langs.get(which);
-                    d.dismiss();
-                    if (l.code.equals(current)) return;
-                    prefs().edit().putString(PREF_LANG, l.code).apply();
-                    doneLabel = null;
-                    log("Patch language: " + l.name + ".");
-                    refreshStatus();
-                })
-                .setNegativeButton("Cancel", null)
-                .show();
+        sheet[0] = showSheet("Patch language", null, list, null, null, "Cancel");
+    }
+
+    /** A dialog in the app's own look: rounded dark card, our buttons.
+     *  primary may be null (then only the quiet secondary button shows). */
+    private Dialog showSheet(String title, String message, View extra,
+                             String primary, Runnable onPrimary, String secondary) {
+        Dialog d = new Dialog(this);
+        d.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(dp(20), dp(20), dp(20), dp(12));
+        box.setBackground(rounded(C_SURFACE, C_STROKE, 16));
+        TextView t = new TextView(this);
+        t.setText(title);
+        t.setTextSize(19);
+        t.setTypeface(Typeface.DEFAULT_BOLD);
+        t.setTextColor(C_TEXT);
+        box.addView(t);
+        if (message != null) {
+            TextView m = new TextView(this);
+            m.setText(message);
+            m.setTextSize(14);
+            m.setTextColor(C_TEXT_DIM);
+            m.setLineSpacing(0, 1.15f);
+            m.setPadding(0, dp(10), 0, 0);
+            box.addView(m);
+        }
+        if (extra != null) box.addView(extra);
+        if (primary != null) {
+            box.addView(makeButton(primary, BTN_PRIMARY, v -> {
+                d.dismiss();
+                if (onPrimary != null) onPrimary.run();
+            }));
+        }
+        if (secondary != null) box.addView(makeButton(secondary, BTN_QUIET, v -> d.dismiss()));
+        d.setContentView(box);
+        d.show();
+        android.view.Window w = d.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new ColorDrawable(0));
+            int width = Math.min(getResources().getDisplayMetrics().widthPixels - dp(32), dp(440));
+            w.setLayout(width, ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+        return d;
     }
 
     // ---------------- view helpers ----------------
@@ -908,6 +1089,51 @@ public class MainActivity extends Activity {
         return t;
     }
 
+    /** A setting row: label, hint (the row's tag) and a switch bound to a boolean pref. */
+    private LinearLayout switchRow(String label, String pref, boolean def,
+                                   java.util.function.Consumer<Boolean> onChange) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(dp(14), dp(10), dp(10), dp(10));
+        row.setBackground(rounded(C_SURFACE, C_STROKE, 12));
+        LinearLayout texts = new LinearLayout(this);
+        texts.setOrientation(LinearLayout.VERTICAL);
+        TextView name = new TextView(this);
+        name.setText(label);
+        name.setTextSize(15);
+        name.setTextColor(C_TEXT);
+        texts.addView(name);
+        TextView hint = new TextView(this);
+        hint.setTextSize(12);
+        hint.setTextColor(C_TEXT_DIM);
+        texts.addView(hint);
+        row.setTag(hint);
+        row.addView(texts, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        Switch sw = new Switch(this);
+        sw.setThumbTintList(new ColorStateList(
+                new int[][]{{android.R.attr.state_checked}, {}}, new int[]{C_ACCENT, C_TEXT_DIM}));
+        sw.setTrackTintList(new ColorStateList(
+                new int[][]{{android.R.attr.state_checked}, {}}, new int[]{0x804F8EF7, C_STROKE}));
+        sw.setChecked(prefs().getBoolean(pref, def));
+        sw.setOnCheckedChangeListener((b, on) -> {
+            if (on == prefs().getBoolean(pref, def)) return;
+            prefs().edit().putBoolean(pref, on).apply();
+            onChange.accept(on);
+            refreshStatus();
+        });
+        row.addView(sw);
+        row.setVisibility(View.GONE);
+        return row;
+    }
+
+    private LinearLayout.LayoutParams rowLp() {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = dp(8);
+        return lp;
+    }
+
     private TextView sectionCaption(String text) {
         TextView t = captionText(text);
         t.setPadding(dp(2), dp(20), 0, dp(2));
@@ -992,17 +1218,29 @@ public class MainActivity extends Activity {
      *  can change) and only switches to the patched language pack once the title
      *  screen has loaded, so screens built before that, notably the loading tips,
      *  stay Japanese until the player returns to the title once. */
+    private void showInstallHelp() {
+        if (isFinishing()) return;
+        showSheet("How Install works",
+                "1. It downloads the latest published patch for the language, if there is one.\n\n"
+                        + "2. It checks that patch against your game: the same tables, with the same "
+                        + "lines.\n\n"
+                        + "3. If your game updated since the patch was made, or no patch is published "
+                        + "for the language, it builds the translation on this phone from the game's "
+                        + "own Japanese text, in a few seconds (Auto-patch). Text the translation "
+                        + "doesn't cover yet stays Japanese until a new patch is out.\n\n"
+                        + "Tap Install again after each game update: the game replaces the patch "
+                        + "when it downloads new data. Translated menus (on unless you turn them "
+                        + "off) and translated images (when turned on) are installed with it.",
+                null, null, null, "Close");
+    }
+
     private void showInstalledDialog(String title) {
         if (isFinishing()) return;
-        new android.app.AlertDialog.Builder(this, android.R.style.Theme_Material_Dialog_Alert)
-                .setTitle(title)
-                .setMessage("Launch the game: menus, story and skills are now translated.\n\n"
+        showSheet(title, "Launch the game: menus, story and skills are now translated.\n\n"
                         + "Some text, like the loading tips, stays Japanese until you go back "
                         + "to the title screen once after starting the game. That text is built "
-                        + "into the game app itself, which the patch can't change.")
-                .setPositiveButton("Launch game", (d, w) -> launchGame())
-                .setNegativeButton("Close", null)
-                .show();
+                        + "into the game app itself, which the patch can't change.",
+                null, "Launch game", this::launchGame, "Close");
     }
 
     private void launchGame() {
@@ -1152,17 +1390,6 @@ public class MainActivity extends Activity {
 
     // ---------------- apply ----------------
 
-    private void onApply() {
-        if (!tryBegin()) return;
-        new Thread(() -> {
-            try {
-                doApply();
-            } finally {
-                ui.post(this::end);
-            }
-        }, "apply").start();
-    }
-
     /** The staged copy (from the file picker). Lives on /sdcard (our external
      *  files dir) so the shell-uid Shizuku service can read it. */
     private File stagedPatch() {
@@ -1196,7 +1423,7 @@ public class MainActivity extends Activity {
 
     /** Copy the picked file into our files dir (readable by the shell-uid service). */
     private void stageFile(Uri uri) {
-        if (!tryBegin()) return;
+        if (!tryBegin("Reading the file…")) return;
         new Thread(() -> {
             try (java.io.InputStream in = getContentResolver().openInputStream(uri);
                  java.io.FileOutputStream out = new java.io.FileOutputStream(stagedPatch())) {
@@ -1209,15 +1436,12 @@ public class MainActivity extends Activity {
                 }
                 out.flush();
                 setStagedLang(STAGED_CUSTOM);
-                long want = expectedPatchSize(selectedLanguage());
-                if (total != want) {
-                    log("Staged __data: " + fmtBytes(total) + " — expected " + fmtBytes(want)
-                            + ". Make sure it's the right file.");
-                } else if (isConnected()) {
-                    log("Staged __data (" + fmtBytes(total) + ") — tap Apply.");
-                } else {
-                    log("Staged __data (" + fmtBytes(total) + "). Connect Shizuku, then tap Apply.");
-                }
+                section("Install a file");
+                log("Read " + fmtBytes(total) + ".");
+                busyLabel = "Installing the file…";
+                doApply();
+                stagedPatch().delete();   // used once; Install downloads its own
+                setStagedLang(null);
             } catch (Throwable t) {
                 log("ERROR reading file: " + t.getMessage());
             } finally {
@@ -1232,10 +1456,9 @@ public class MainActivity extends Activity {
                 log("Shizuku is not connected. Start Shizuku, then reopen the app.");
                 return;
             }
-            section("Apply");
             File src = localPatch();
             if (src == null || !src.exists()) {
-                log("No patch file. Download it or choose a __data file.");
+                log("No patch file to install.");
                 return;
             }
             String stagedCode = stagedLangCode();
@@ -1249,7 +1472,23 @@ public class MainActivity extends Activity {
                 log("Note: patch is " + fmtBytes(len) + ", expected " + fmtBytes(want) + " (continuing).");
             }
 
+            // After a game update the downloaded patch lacks the new rows (and would
+            // drop them): build the patch on the phone instead.
+            Boolean fits = patchFitsGame(src);
+            if (Boolean.FALSE.equals(fits) && stagedLang == null) {
+                log("⚠ This file doesn't match your game's current text (made for another game"
+                        + " version?). Installing it anyway.");
+            } else if (Boolean.FALSE.equals(fits)) {
+                log("Your game has newer text than this patch (it updated since the patch was made)."
+                        + " Auto-patching instead.");
+                busyLabel = "Auto-patching…";
+                runAutoPatch();
+                return;
+            }
+            if (fits == null) log("Couldn't compare the patch with your game; installing it as is.");
+
             shell("am force-stop jp.gree_ent.mushoku");
+            saveOriginalIfStock();
 
             // The asset-hash subfolder changes on some game updates, so resolve
             // the live bundle path(s) at apply time and patch every copy found.
@@ -1281,7 +1520,8 @@ public class MainActivity extends Activity {
                 log("✓ " + what + " installed to " + okCount
                         + (okCount == 1 ? " cache location (" : " cache locations (")
                         + fmtBytes(len) + (okCount == 1 ? ")." : " each)."));
-                log("Launch the game. Re-apply after each game update.");
+                syncUi(stagedLang != null ? stagedLang : selectedLanguage(), 0, 100);
+                log("Launch the game. Tap Install again after each game update.");
                 doneLabel = "Patch installed";
                 ui.post(() -> uninstallBtn.setVisibility(View.VISIBLE));
                 ui.post(() -> showInstalledDialog(what + " installed"));
@@ -1291,11 +1531,12 @@ public class MainActivity extends Activity {
                 log("✗ Copy failed. Retry, or check free space.");
             }
         } catch (Throwable t) {
-            log("✗ Apply failed: " + t.getMessage());
+            log("✗ Install failed: " + t.getMessage());
         }
     }
 
-    /** Delete every cached language pack so the game re-downloads stock JP.
+    /** Mark every cached language pack as not downloaded (invalidateLangPacks)
+     *  so the game re-downloads stock JP.
      *  Use this when our patch made things worse (wrong-version bundle, crash
      *  on load, missing text): the game fetches a clean JP bundle next launch. */
     private void onResetLangPacks() {
@@ -1303,24 +1544,19 @@ public class MainActivity extends Activity {
             log("Connect Shizuku first (reset needs shell access).");
             return;
         }
-        if (!tryBegin()) return;
+        if (!tryBegin("Resetting language packs…")) return;
         new Thread(() -> {
             try {
                 section("Reset");
                 shell("am force-stop " + GAME_PKG);
-                // delete every __data under the language group folder (all versions)
-                ShellResult r = shell(
-                        "for f in " + GAME_CACHE_GLOB + "; do rm -f \"$f\" && echo \"DEL:$f\"; done");
-                int del = 0;
-                for (String line : r.out.split("\n")) {
-                    if (line.trim().startsWith("DEL:")) del++;
-                }
+                // mark every cached language pack (all versions) as not downloaded
+                int del = invalidateLangPacks();
                 // also drop our staged patch so a stale __data isn't reapplied later
                 File staged = stagedPatch();
                 boolean cleared = staged != null && staged.exists() && staged.delete();
                 if (cleared) setStagedLang(null);
                 log(del > 0
-                        ? "Deleted " + del + " language pack(s)" + (cleared ? " and the staged patch" : "")
+                        ? "Reset " + del + " language pack(s)" + (cleared ? " and cleared the staged patch" : "")
                                 + ". The game re-downloads Japanese on next launch."
                         : "No language packs found (game already clean?)"
                                 + (cleared ? " Cleared the staged patch." : ""));
@@ -1417,77 +1653,80 @@ public class MainActivity extends Activity {
 
     // ---------------- download latest patch (P1) ----------------
 
-    /** Size of the newest live language bundle on the device, or -1 if none. */
-    private long newestLiveBundleSize() {
-        try {
-            String src = newestLiveBundle();
-            return src == null ? -1 : remoteSize(src);
-        } catch (Throwable t) {
-            return -1;
+    /** Download the published patch, check it against the game and install it;
+     *  build the translation on the phone when there is none or it doesn't fit. */
+    private void onInstall() {
+        if (!isConnected()) {
+            log("Connect Shizuku first.");
+            return;
         }
-    }
-
-    private void onDownload() {
-        if (!tryBegin()) return;
+        if (!tryBegin("Installing…")) return;
         new Thread(() -> {
             try {
-                section("Download");
-                saveVersion(Downloader.fetchString(VERSION_URL, s -> {}));
-                PatchLanguage lang = selectedLanguage();
-                if (!lang.downloadable()) {
-                    log("No ready-made " + lang.name + " patch for this game version yet.\n"
-                            + "Use Auto-patch (beta) to build it on this phone.");
-                    return;
-                }
-                long wantSize = lang.patchSize;
-                String wantMd5 = lang.patchMd5;
-                log("Latest " + lang.name + " patch: " + fmtBytes(wantSize) + ", built "
-                        + (lang.builtAt.isEmpty() ? "?" : lang.builtAt) + ".");
-                // Cross-check against the live bundle on the device: if the game
-                // updated since this patch was built, the sizes won't match and
-                // the downloadable patch is the WRONG version for this game.
-                long live = isConnected() ? newestLiveBundleSize() : -1;
-                if (live > 0 && wantSize > 0 && live != wantSize) {
-                    log("⚠ Your game's language pack is " + fmtBytes(live)
-                            + ": the game updated after this patch was built.\n"
-                            + "  Applying it would install the wrong version — try Auto-patch (beta) instead.");
-                }
-                File staged = stagedPatch();
-                if (staged.exists() && wantMd5.equalsIgnoreCase(md5Of(staged))) {
-                    setStagedLang(lang.code);
-                    log("Already up to date.");
-                } else {
-                    Downloader.fetchToFile(lang.isDefault() ? DATA_URL : RELEASE_BASE + lang.patchAsset,
-                            staged, s -> {});
-                    String got = md5Of(staged);
-                    boolean badSize = wantSize > 0 && staged.length() != wantSize;
-                    if (!wantMd5.equalsIgnoreCase(got) || badSize) {
-                        // never leave a corrupt file staged under a language label
-                        staged.delete();
-                        setStagedLang(null);
-                        log("✗ Download corrupted (" + (badSize ? "size" : "md5") + " mismatch). Try again.");
-                        return;
-                    }
-                    setStagedLang(lang.code);
-                    log("✓ " + lang.name + " patch downloaded and verified.");
-                }
-                try {
-                    Downloader.fetchToFile(cacheUrl(lang), cacheFile(lang), s -> {});
-                    writeCacheStamp(lang);
-                } catch (Throwable t) {
-                    log("⚠ Translation cache not refreshed (" + t.getMessage() + ").");
-                }
-                log("Ready — tap Apply.");
-            } catch (Throwable t) {
-                log("✗ Download failed: " + t.getMessage()
-                        + "\nCheck your connection, or use \"Choose __data file…\".");
+                section("Install " + selectedLanguage().name);
+                if (downloadPatch()) doApply();
+                else runAutoPatch();
             } finally {
                 ui.post(this::end);
             }
-        }, "download").start();
+        }, "install").start();
     }
 
-    // ---------------- on-device auto-patch (beta) ----------------
+    /** Stage the selected language's published patch, verified. False when there is
+     *  none for this game version or it can't be fetched (then Auto-patch builds it). */
+    private boolean downloadPatch() {
+        progress(-1, "Checking for the latest patch");
+        File staged = stagedPatch();
+        PatchLanguage lang;
+        try {
+            saveVersion(Downloader.fetchString(VERSION_URL, s -> {}));
+            lang = selectedLanguage();
+        } catch (Throwable t) {
+            lang = selectedLanguage();
+            boolean have = lang.downloadable() && staged.exists() && lang.code.equals(stagedLangCode());
+            log("Offline (" + t.getMessage() + ")" + (have ? ": installing the patch downloaded earlier."
+                    : ": building the translation on this phone."));
+            return have;
+        }
+        if (!lang.downloadable()) {
+            log("No ready-made " + lang.name + " patch for this game version: building it on this phone.");
+            return false;
+        }
+        try {
+            log("Latest " + lang.name + " patch: built "
+                    + (lang.builtAt.isEmpty() ? "?" : lang.builtAt.replace('T', ' ')) + ".");
+            if (staged.exists() && lang.patchMd5.equalsIgnoreCase(md5Of(staged))) {
+                setStagedLang(lang.code);
+            } else {
+                progress(-1, "Downloading the " + lang.name + " patch");
+                Downloader.fetchToFile(lang.isDefault() ? DATA_URL : RELEASE_BASE + lang.patchAsset,
+                        staged, s -> {});
+                boolean badSize = lang.patchSize > 0 && staged.length() != lang.patchSize;
+                if (badSize || !lang.patchMd5.equalsIgnoreCase(md5Of(staged))) {
+                    // never leave a corrupt file staged under a language label
+                    staged.delete();
+                    setStagedLang(null);
+                    log("✗ Download corrupted (" + (badSize ? "size" : "md5") + " mismatch):"
+                            + " building the translation on this phone instead.");
+                    return false;
+                }
+                setStagedLang(lang.code);
+                log("✓ Downloaded and verified (" + fmtBytes(staged.length()) + ").");
+            }
+            try {
+                Downloader.fetchToFile(cacheUrl(lang), cacheFile(lang), s -> {});
+                writeCacheStamp(lang);
+            } catch (Throwable t) {
+                log("⚠ Translation cache not refreshed (" + t.getMessage() + ").");
+            }
+            return true;
+        } catch (Throwable t) {
+            log("✗ Download failed (" + t.getMessage() + "): building the translation on this phone.");
+            return false;
+        }
+    }
+
+    // ---------------- on-device auto-patch ----------------
 
     /** Expected, user-explainable auto-patch failure (message is shown as-is). */
     private static final class AutoPatchFail extends Exception {
@@ -1501,23 +1740,57 @@ public class MainActivity extends Activity {
             log("Connect Shizuku first.");
             return;
         }
-        if (!tryBegin()) return;
+        if (!tryBegin("Auto-patching…")) return;
         new Thread(() -> {
             try {
-                doAutoPatch();
-            } catch (AutoPatchFail f) {
-                log("✗ Auto-patch failed: " + f.getMessage());
-                log(AUTO_PATCH_ADVICE);
-            } catch (Throwable t) {
-                String msg = String.valueOf(t.getMessage());
-                int nl = msg.indexOf('\n');
-                if (nl >= 0) msg = msg.substring(0, nl);
-                log("✗ Auto-patch failed (" + t.getClass().getSimpleName() + ": " + msg + ").");
-                log(AUTO_PATCH_ADVICE);
+                runAutoPatch();
             } finally {
                 ui.post(this::end);
             }
         }, "autopatch").start();
+    }
+
+    /** doAutoPatch with its failures logged. */
+    private void runAutoPatch() {
+        try {
+            doAutoPatch();
+        } catch (AutoPatchFail f) {
+            log("✗ Auto-patch failed: " + f.getMessage());
+            log(AUTO_PATCH_ADVICE);
+        } catch (Throwable t) {
+            String msg = String.valueOf(t.getMessage());
+            int nl = msg.indexOf('\n');
+            if (nl >= 0) msg = msg.substring(0, nl);
+            log("✗ Auto-patch failed (" + t.getClass().getSimpleName() + ": " + msg + ").");
+            log(AUTO_PATCH_ADVICE);
+        }
+    }
+
+    /** Whether the patch holds the same rows as the game's live language pack.
+     *  Row ids are the same in every language, so they tell game builds apart
+     *  whatever the text. null when it can't be checked. */
+    private Boolean patchFitsGame(File patch) {
+        try {
+            String live = newestLiveBundle();
+            File dir = getExternalFilesDir(null);
+            if (live == null || dir == null) return null;
+            File liveF = new File(dir, "live_check.__data");
+            if (!shell("cp '" + live + "' '" + liveF.getAbsolutePath() + "' && echo OK").out.contains("OK"))
+                return null;
+            byte[][] k = gameKeys(dir);
+            List<String> names = tableNames();
+            Map<String, List<String>> game = AutoPatcher.rowIds(
+                    java.nio.file.Files.readAllBytes(liveF.toPath()), k[0], k[1], names,
+                    (pct, phase) -> progress(pct / 2, "Checking the patch against your game"));
+            liveF.delete();
+            Map<String, List<String>> ours = AutoPatcher.rowIds(
+                    java.nio.file.Files.readAllBytes(patch.toPath()), k[0], k[1], names,
+                    (pct, phase) -> progress(50 + pct / 2, "Checking the patch against your game"));
+            if (game.size() < 100 || ours.size() < 100) return null;
+            return game.equals(ours);
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     /** Fresh version.json when online (saved for later), else the saved copy, else null. */
@@ -1561,29 +1834,387 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void doAutoPatch() throws Exception {
-        section("Auto-patch (beta)");
-        shell("am force-stop " + GAME_PKG);
+    // ---------------- translated menus and images ----------------
+    // The game caches its UI bundles like the language pack:
+    // UnityCache/Shared/<name folder>/<version folder>/__data. A release zip
+    // holds, per language, each patched bundle under its name folder plus a
+    // manifest (src_md5 = stock, out_md5 = ours); see tools/prefab-patch/
+    // build_android_prefabs.py. Two kinds: the menu text baked into the UI
+    // prefabs (on by default) and the redrawn images (opt-in). An image bundle
+    // that also has menu text carries both, so the image copy replaces the text
+    // copy. A cached bundle is overwritten only when it is stock or one this app
+    // wrote (either kind), so a game update leaves new bundles alone.
 
-        // 1. live bundle path(s)
-        List<String> dests = findLiveBundles();
-        if (dests.isEmpty())
-            throw new AutoPatchFail("no language pack on the device. Open the game once so it downloads its data.");
+    private static final String GAME_SHARED =
+            "/sdcard/Android/data/" + GAME_PKG + "/files/UnityCache/Shared/";
 
-        // source = NEWEST bundle (an old asset-hash folder may linger post-update)
-        String newest = newestLiveBundle();
-        String srcBundle = newest != null ? newest : dests.get(0);
+    /** One kind of UI bundle zip and the prefs that track it. */
+    private static final class UiKind {
+        final String id, what, prefLang, prefWritten, prefBundles;
 
-        // 2. stage bundle + global-metadata into our own dir (shell uid can read them)
-        File dir = getExternalFilesDir(null);
-        if (dir == null) throw new AutoPatchFail("app storage is unavailable.");
+        UiKind(String id, String what, String prefLang, String prefWritten, String prefBundles) {
+            this.id = id;
+            this.what = what;
+            this.prefLang = prefLang;
+            this.prefWritten = prefWritten;
+            this.prefBundles = prefBundles;
+        }
+
+        String asset(PatchLanguage l) {
+            return this == PREFABS ? l.prefabsAsset : l.imagesAsset;
+        }
+
+        String md5(PatchLanguage l) {
+            return this == PREFABS ? l.prefabsMd5 : l.imagesMd5;
+        }
+    }
+
+    private static final UiKind PREFABS = new UiKind("prefabs", "menus",
+            PREF_PREFABS_LANG, PREF_PREFABS_WRITTEN, PREF_PREFABS_BUNDLES);
+    private static final UiKind IMAGES = new UiKind("images", "images",
+            PREF_IMAGES_LANG, PREF_IMAGES_WRITTEN, PREF_IMAGES_BUNDLES);
+
+    private static Set<String> csvSet(String csv) {
+        Set<String> out = new java.util.HashSet<>();
+        for (String x : csv.split(",")) if (!x.trim().isEmpty()) out.add(x.trim().toLowerCase(Locale.US));
+        return out;
+    }
+
+    /** After a language is installed: its menus unless the player turned them off,
+     *  its images when the player opted in; never a mix of languages. */
+    private void syncUi(PatchLanguage lang, int p0, int p1) {
+        int mid = (p0 + p1) / 2;
+        try {
+            boolean on = prefs().getBoolean(PREF_PREFABS, true);
+            if (on && lang.hasPrefabs()) {
+                installUi(PREFABS, lang, p0, mid);
+            } else if (!prefs().getString(PREF_PREFABS_LANG, "").isEmpty()) {
+                log(on ? "Removing the translated menus of the previous language."
+                        : "Translated menus are off: putting the Japanese menus back.");
+                removeUi(PREFABS);
+            }
+        } catch (Throwable t) {
+            log("⚠ Menus not updated (" + t.getMessage() + "). The text patch is installed.");
+        }
+        try {
+            String installed = prefs().getString(PREF_IMAGES_LANG, "");
+            if (prefs().getBoolean(PREF_IMAGES, false) && lang.hasImages()) {
+                installUi(IMAGES, lang, mid, p1);
+            } else if (!installed.isEmpty() && !installed.equals(lang.code)) {
+                log("Removing the translated images of the previous language.");
+                removeUi(IMAGES);
+            }
+        } catch (Throwable t) {
+            log("⚠ Images not updated (" + t.getMessage() + "). The text patch is installed.");
+        }
+    }
+
+    /** "md5  name/version/__data" for every cached copy of the given bundles. */
+    private Map<String, String> cachedMd5s(java.util.Collection<String> names) throws Exception {
+        Map<String, String> out = new java.util.LinkedHashMap<>();
+        List<String> all = new ArrayList<>(names);
+        for (int i = 0; i < all.size(); i += 40) {
+            StringBuilder cmd = new StringBuilder("cd " + GAME_SHARED + " && md5sum");
+            for (String n : all.subList(i, Math.min(all.size(), i + 40))) cmd.append(' ').append(n).append("/*/__data");
+            for (String line : shell(cmd + " 2>/dev/null").out.split("\n")) {
+                String[] parts = line.trim().split("\\s+");
+                if (parts.length == 2 && parts[0].matches("[0-9a-fA-F]{32}"))
+                    out.put(parts[1], parts[0].toLowerCase(Locale.US));
+            }
+        }
+        return out;
+    }
+
+    private void installUi(UiKind kind, PatchLanguage lang, int p0, int p1) throws Exception {
+        int span = p1 - p0;
+        progress(p0, "Downloading the translated " + kind.what);
+        File zip = appFile(kind.id + "-" + lang.code + ".zip");
+        if (!zip.exists() || !kind.md5(lang).equalsIgnoreCase(md5Of(zip))) {
+            Downloader.fetchToFile(RELEASE_BASE + kind.asset(lang), zip, s -> {});
+            if (!kind.md5(lang).equalsIgnoreCase(md5Of(zip))) {
+                zip.delete();
+                throw new Exception(kind.what + " download corrupted, retry");
+            }
+        }
+
+        // unpack next to it (the shell uid copies from there)
+        progress(p0 + span / 4, "Unpacking the " + kind.what);
+        File dir = appFile(kind.id + "-" + lang.code);
+        File[] old = dir.listFiles();
+        if (old != null) for (File f : old) f.delete();
+        dir.mkdirs();
+        org.json.JSONArray manifest = null;
+        try (java.util.zip.ZipInputStream zin = new java.util.zip.ZipInputStream(
+                new java.io.FileInputStream(zip))) {
+            java.util.zip.ZipEntry ze;
+            while ((ze = zin.getNextEntry()) != null) {
+                String n = ze.getName();
+                if (n.equals("manifest.json")) {
+                    manifest = new org.json.JSONArray(new String(readAll(zin), java.nio.charset.StandardCharsets.UTF_8));
+                } else if (n.matches("[0-9a-f]{32}")) {
+                    java.nio.file.Files.write(new File(dir, n).toPath(), readAll(zin));
+                }
+            }
+        }
+        if (manifest == null) throw new Exception(kind.what + " zip has no manifest");
+
+        Map<String, String[]> wanted = new java.util.LinkedHashMap<>();   // name -> {src, out}
+        for (int i = 0; i < manifest.length(); i++) {
+            org.json.JSONObject e = manifest.getJSONObject(i);
+            String n = e.getString("bundle");
+            if (n.matches("[0-9a-f]{32}") && new File(dir, n).exists())
+                wanted.put(n, new String[]{e.getString("src_md5").toLowerCase(Locale.US),
+                        e.getString("out_md5").toLowerCase(Locale.US)});
+        }
+
+        // overwrite every cached copy that is stock or ours (menus or images); keep its __info valid
+        progress(p0 + span / 2, "Installing the " + kind.what);
+        Set<String> ours = csvSet(prefs().getString(kind.prefWritten, ""));
+        for (String[] so : wanted.values()) ours.add(so[1]);
+        Set<String> anyOurs = new java.util.HashSet<>(ours);
+        anyOurs.addAll(csvSet(prefs().getString(PREF_PREFABS_WRITTEN, "")));
+        anyOurs.addAll(csvSet(prefs().getString(PREF_IMAGES_WRITTEN, "")));
+        List<String> cmds = new ArrayList<>();
+        Set<String> done = new java.util.HashSet<>();
+        Set<String> seen = new java.util.HashSet<>();
+        for (Map.Entry<String, String> c : cachedMd5s(wanted.keySet()).entrySet()) {
+            String rel = c.getKey(), md5 = c.getValue();
+            String name = rel.substring(0, rel.indexOf('/'));
+            String[] so = wanted.get(name);
+            if (so == null) continue;
+            seen.add(name);
+            String info = GAME_SHARED + rel.substring(0, rel.lastIndexOf('/')) + "/__info";
+            String fixInfo = "[ -s '" + info + "' ] || printf '%s\\n%s\\n1\\n__data\\n' -1 \"$(date +%s)\" > '" + info + "'";
+            if (md5.equals(so[1])) {
+                cmds.add(fixInfo + "; echo 'UI_OK " + name + "'");
+            } else if (md5.equals(so[0]) || anyOurs.contains(md5)) {
+                cmds.add("cp '" + new File(dir, name).getAbsolutePath() + "' '" + GAME_SHARED + rel
+                        + "' && echo 'UI_OK " + name + "'; " + fixInfo);
+            }
+            // anything else is a game build we don't know (an older copy the game no longer
+            // loads, or a newer one): leave it as it is
+        }
+        for (int i = 0; i < cmds.size(); i += 25) {
+            String out = shell(String.join("; ", cmds.subList(i, Math.min(cmds.size(), i + 25)))).out;
+            for (String line : out.split("\n"))
+                if (line.trim().startsWith("UI_OK ")) done.add(line.trim().substring(6));
+            progress(p0 + span / 2 + (span / 2) * Math.min(cmds.size(), i + 25) / Math.max(1, cmds.size()),
+                    "Installing the " + kind.what);
+        }
+        for (File f : dir.listFiles()) f.delete();   // the zip stays, for the next switch
+        dir.delete();
+
+        prefs().edit()
+                .putString(kind.prefLang, lang.code)
+                .putString(kind.prefWritten, String.join(",", ours))
+                .putString(kind.prefBundles, String.join(",", wanted.keySet()))
+                .apply();
+        // counted per bundle, not per cached copy: old game versions leave extra copies
+        int notCached = wanted.size() - seen.size();
+        int foreign = seen.size() - done.size();
+        log("✓ Translated " + kind.what + ": " + done.size() + " of " + wanted.size() + " bundles in " + lang.name
+                + (foreign > 0 ? ", " + foreign + " left as they are (changed by a game update)" : "")
+                + (notCached > 0 ? ", " + notCached + " not downloaded by the game yet" : "") + ".");
+    }
+
+    private static byte[] readAll(java.io.InputStream in) throws java.io.IOException {
+        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[1 << 16];
+        int n;
+        while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+        return bo.toByteArray();
+    }
+
+    /** Back to the Japanese bundles of one kind: blank the __info of every bundle
+     *  we wrote, so the game downloads the stock one at next launch (we can't delete).
+     *  A bundle that now holds the other kind's copy is left alone. */
+    private int removeUi(UiKind kind) throws Exception {
+        Set<String> names = csvSet(prefs().getString(kind.prefBundles, ""));
+        Set<String> ours = csvSet(prefs().getString(kind.prefWritten, ""));
+        List<String> cmds = new ArrayList<>();
+        for (Map.Entry<String, String> c : cachedMd5s(names).entrySet()) {
+            if (!ours.contains(c.getValue())) continue;
+            String rel = c.getKey();
+            String info = GAME_SHARED + rel.substring(0, rel.lastIndexOf('/')) + "/__info";
+            cmds.add(": > '" + info + "' && echo 'UI_RESET'");
+        }
+        int n = 0;
+        for (int i = 0; i < cmds.size(); i += 25) {
+            for (String line : shell(String.join("; ", cmds.subList(i, Math.min(cmds.size(), i + 25)))).out.split("\n"))
+                if (line.trim().equals("UI_RESET")) n++;
+        }
+        prefs().edit().putString(kind.prefLang, "").apply();
+        log(n > 0 ? "Removed the translated " + kind.what + " from " + n + " bundle" + (n == 1 ? "" : "s")
+                + ": the game downloads the Japanese ones at next launch."
+                : "No translated " + kind.what + " installed.");
+        return n;
+    }
+
+    private void onRemoveImages() {
+        if (!isConnected()) {
+            log("Connect Shizuku first.");
+            return;
+        }
+        if (!tryBegin("Removing images…")) return;
+        new Thread(() -> {
+            try {
+                section("Remove translated images");
+                shell("am force-stop " + GAME_PKG);
+                removeUi(IMAGES);
+                // the image bundles that also carry menu text: put the text-only copy back
+                PatchLanguage menus = PatchLanguage.find(languages, prefs().getString(PREF_PREFABS_LANG, ""));
+                if (menus != null && menus.hasPrefabs()) installUi(PREFABS, menus, 0, 100);
+            } catch (Throwable t) {
+                log("✗ Couldn't remove the images: " + t.getMessage());
+            } finally {
+                ui.post(this::end);
+            }
+        }, "remove-images").start();
+    }
+
+    /** Status-card progress for Auto-patch; repeated values are dropped. */
+    private void progress(int pct, String phase) {
+        if (pct == progressPct && phase.equals(progressPhase)) return;
+        progressPhase = phase;
+        progressPct = pct;
+        refreshStatus();
+    }
+
+    // ---------------- the Japanese original ----------------
+    // The translations match Japanese text, so patching an already-patched pack
+    // changes almost nothing. Like the PC installer's stock copy, keep the
+    // Japanese pack before replacing it, and start from it when switching.
+
+    private File originalJa() {
+        return appFile("original_ja.__data");
+    }
+
+    private boolean isPublishedStock(String md5) {
+        for (PatchLanguage l : languages)
+            if (!l.stockMd5.isEmpty() && md5.equalsIgnoreCase(l.stockMd5)) return true;
+        return false;
+    }
+
+    /** A pack this app installed or published: a patch, never the Japanese original. */
+    private boolean isKnownPatch(String md5) {
+        if (md5.equalsIgnoreCase(prefs().getString(PREF_AUTOPATCH_MD5, ""))) return true;
+        for (PatchLanguage l : languages)
+            if (!l.patchMd5.isEmpty() && md5.equalsIgnoreCase(l.patchMd5)) return true;
+        for (String h : patchHistory.split(","))
+            if (md5.equalsIgnoreCase(h.trim())) return true;
+        return false;
+    }
+
+    /** Whether the saved Japanese copy is intact and holds the same rows as the
+     *  game's pack (the same game version), whatever language that pack is in. */
+    private boolean originalFits(File live, byte[][] k, List<String> names) {
+        try {
+            String orig = prefs().getString(PREF_ORIGINAL_MD5, "");
+            File o = originalJa();
+            if (orig.isEmpty() || !o.exists() || !orig.equalsIgnoreCase(md5Of(o))) return false;
+            progress(8, "Checking the saved Japanese pack");
+            return AutoPatcher.rowIds(java.nio.file.Files.readAllBytes(o.toPath()), k[0], k[1], names,
+                            (pct, phase) -> {})
+                    .equals(AutoPatcher.rowIds(java.nio.file.Files.readAllBytes(live.toPath()), k[0], k[1],
+                            names, (pct, phase) -> {}));
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    private void keepOriginal(File japanese, String md5) {
+        try {
+            if (md5.equalsIgnoreCase(prefs().getString(PREF_ORIGINAL_MD5, "")) && originalJa().exists()) return;
+            java.nio.file.Files.copy(japanese.toPath(), originalJa().toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            prefs().edit().putString(PREF_ORIGINAL_MD5, md5.toLowerCase(Locale.US)).apply();
+        } catch (Throwable t) {
+            log("⚠ Couldn't keep a copy of the Japanese pack (" + t.getMessage() + ").");
+        }
+    }
+
+    /** Apply is about to replace the live pack: keep it if it's the published stock. */
+    private void saveOriginalIfStock() {
+        try {
+            String md5 = readLiveMd5();
+            String live = newestLiveBundle();
+            if (md5 == null || live == null || !isPublishedStock(md5)) return;
+            if (md5.equalsIgnoreCase(prefs().getString(PREF_ORIGINAL_MD5, "")) && originalJa().exists()) return;
+            ShellResult r = shell("cp '" + live + "' '" + originalJa().getAbsolutePath() + "' && echo OK");
+            if (r.out.contains("OK") && md5.equalsIgnoreCase(md5Of(originalJa())))
+                prefs().edit().putString(PREF_ORIGINAL_MD5, md5).apply();
+        } catch (Throwable ignored) {
+            // best effort: Auto-patch falls back to a re-download
+        }
+    }
+
+    /** Make the game download its Japanese language pack again. The shell uid
+     *  can overwrite the game's cache files but not delete them (the folders
+     *  have no group write), so blank each entry's __info instead: Unity then
+     *  treats the entry as not cached and downloads it on next launch.
+     *  Returns how many entries were reset. */
+    private int invalidateLangPacks() throws android.os.RemoteException {
+        ShellResult r = shell("for f in " + GAME_CACHE_GLOB + "; do [ -f \"$f\" ] || continue; "
+                + "i=\"${f%/__data}/__info\"; : > \"$i\" 2>/dev/null; "
+                + "[ -f \"$i\" ] && [ ! -s \"$i\" ] && echo \"RESET:$f\"; done");
+        int n = 0;
+        for (String line : r.out.split("\n"))
+            if (line.trim().startsWith("RESET:")) n++;
+        return n;
+    }
+
+    /** No Japanese pack to translate from: the game holds a patch, and no saved
+     *  Japanese copy matches this game version. Mark the pack for re-download and
+     *  let the player open the game; the app never launches it by itself. */
+    private void needJapanese() throws Exception {
+        int n = invalidateLangPacks();
+        log("Auto-patch translates from the game's Japanese text, but the game holds a patch"
+                + " and this phone has no Japanese copy for this game version.");
+        log(n > 0 ? "→ Open the game until the title screen (it downloads its Japanese text),"
+                + " close it, then tap Install again."
+                : "→ Tap Delete all language packs, open the game until the title screen,"
+                + " close it, then tap Install again.");
+        doneLabel = null;
+        ui.post(this::showRedownloadDialog);
+    }
+
+    private void showRedownloadDialog() {
+        if (isFinishing()) return;
+        showSheet("One more step", "Building the translation needs the game's Japanese text, "
+                        + "and the game currently holds a patch.\n\nOpen the game until the title "
+                        + "screen so it downloads its Japanese text, close it, then come back and tap "
+                        + "Install again. The app keeps a copy, so you won't need this again until "
+                        + "the next game update.",
+                null, null, null, "OK");
+    }
+
+    /** Names of the language pack's tables (bundled asset). */
+    private List<String> tableNames() throws java.io.IOException {
+        List<String> names = new ArrayList<>();
+        try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(
+                getAssets().open("tables.txt")))) {
+            String ln;
+            while ((ln = br.readLine()) != null) {
+                ln = ln.trim();
+                if (!ln.isEmpty()) names.add(ln);
+            }
+        }
+        return names;
+    }
+
+    private boolean builtInKeyOffsets;
+
+    private String keyMismatch() {
+        return "the AES keys don't match this game build"
+                + (builtInKeyOffsets ? " (built-in key offsets were used)." : ".");
+    }
+
+    /** The game's AES keys, read from its global-metadata.dat (copied into dir).
+     *  Offsets come from the live version.json; the baked fallback goes stale
+     *  with every game update. */
+    private byte[][] gameKeys(File dir) throws Exception {
         String q = dir.getAbsolutePath();
-        File stockF = new File(dir, "stock_new.__data");
         File metaF = new File(dir, "global-metadata.dat");
-        ShellResult r1 = shell("cp '" + srcBundle + "' '" + q
-                + "/stock_new.__data' && echo OK1");
-        if (!r1.out.contains("OK1"))
-            throw new AutoPatchFail("could not read the game's language pack" + r1.reason() + ".");
         ShellResult r2 = shell("cp '" + META_PATH + "' '" + q
                 + "/global-metadata.dat' && echo OK2");
         if (!r2.out.contains("OK2")) {
@@ -1596,11 +2227,7 @@ public class MainActivity extends Activity {
                 throw new AutoPatchFail("could not read the game's metadata" + r2.reason() + ".");
         }
 
-        // 3. AES keys from the game's own metadata. Offsets come from the live
-        // version.json; the baked fallback goes stale with every game update.
         Map<String, Object> v = loadReleaseInfo();
-        PatchLanguage lang = selectedLanguage();
-        log("Language: " + lang.name + ".");
         int keyOff = FALLBACK_KEY_OFF, ivOff = FALLBACK_IV_OFF;
         boolean liveOffsets = false;
         if (v != null && v.containsKey("meta_key_off") && v.containsKey("meta_iv_off")) {
@@ -1618,17 +2245,48 @@ public class MainActivity extends Activity {
                     + String.format(Locale.US, "0x%x/0x%x", keyOff, ivOff) + ".\n"
                     + "⚠ These go stale with game updates. Go online and retry if this fails.");
         }
-        String keyMismatch = "the AES keys don't match this game build"
-                + (liveOffsets ? "." : " (built-in key offsets were used).");
+        builtInKeyOffsets = !liveOffsets;
         byte[] meta = java.nio.file.Files.readAllBytes(metaF.toPath());
         byte[][] keys;
         try {
             keys = MasterCrypto.extractKeys(meta, keyOff, ivOff);
         } catch (IllegalArgumentException e) {
-            throw new AutoPatchFail(keyMismatch);
+            throw new AutoPatchFail(keyMismatch());
         }
 
+        return keys;
+    }
+
+    private void doAutoPatch() throws Exception {
+        section("Auto-patch");
+        progress(0, "Reading the game files");
+        shell("am force-stop " + GAME_PKG);
+
+        // 1. live bundle path(s)
+        List<String> dests = findLiveBundles();
+        if (dests.isEmpty())
+            throw new AutoPatchFail("no language pack on the device. Open the game once so it downloads its data.");
+
+        // source = NEWEST bundle (an old asset-hash folder may linger post-update)
+        String newest = newestLiveBundle();
+        String srcBundle = newest != null ? newest : dests.get(0);
+
+        // 2. stage the bundle into our own dir (the shell uid can write it there)
+        File dir = getExternalFilesDir(null);
+        if (dir == null) throw new AutoPatchFail("app storage is unavailable.");
+        String q = dir.getAbsolutePath();
+        File stockF = new File(dir, "stock_new.__data");
+        ShellResult r1 = shell("cp '" + srcBundle + "' '" + q
+                + "/stock_new.__data' && echo OK1");
+        if (!r1.out.contains("OK1"))
+            throw new AutoPatchFail("could not read the game's language pack" + r1.reason() + ".");
+        progress(5, "Reading the game's keys");
+        byte[][] keys = gameKeys(dir);
+        PatchLanguage lang = selectedLanguage();
+        log("Language: " + lang.name + ".");
+
         // 4. translation cache (refreshed whenever the release is newer)
+        progress(7, "Loading the translations");
         ensureFreshCache(lang);
         Map<String, Object> pl = JsonMap.parseObject(readSmall(cacheFile(lang)));
         @SuppressWarnings("unchecked")
@@ -1653,30 +2311,55 @@ public class MainActivity extends Activity {
         }
 
         // 5. known table names (bundled asset)
-        List<String> names = new ArrayList<>();
-        try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.InputStreamReader(
-                getAssets().open("tables.txt")))) {
-            String ln;
-            while ((ln = br.readLine()) != null) {
-                ln = ln.trim();
-                if (!ln.isEmpty()) names.add(ln);
+        List<String> names = tableNames();
+
+        // 6. translate from Japanese. A patch in the game's pack is no use: take the
+        // saved Japanese copy when it holds the same rows (the same game version).
+        String liveMd5 = md5Of(stockF).toLowerCase(Locale.US);
+        File srcF = stockF;
+        if (isKnownPatch(liveMd5)) {
+            if (!originalFits(stockF, keys, names)) {
+                needJapanese();
+                return;
             }
+            log("The game has a patch installed: starting from the saved Japanese pack.");
+            srcF = originalJa();
         }
 
-        // 6. patch fully on-device. Per-table notes stay out of the UI log;
+        // 7. patch fully on-device. Per-table notes stay out of the UI log;
         // only the summary below is shown.
-        byte[] stock = java.nio.file.Files.readAllBytes(stockF.toPath());
+        byte[] stock;
         List<String> notes = new ArrayList<>();
         AutoPatcher.Result res;
-        try {
-            res = AutoPatcher.run(stock, keys[0], keys[1], cache, hand, names, notes::add);
-        } catch (IllegalStateException e) {
-            if (String.valueOf(e.getMessage()).contains("AES keys")) throw new AutoPatchFail(keyMismatch);
-            throw e;
+        while (true) {
+            stock = java.nio.file.Files.readAllBytes(srcF.toPath());
+            try {
+                res = AutoPatcher.run(stock, keys[0], keys[1], cache, hand, names, notes::add,
+                        (pct, phase) -> progress(10 + pct * 80 / 100, phase));
+            } catch (IllegalStateException e) {
+                if (String.valueOf(e.getMessage()).contains("AES keys")) throw new AutoPatchFail(keyMismatch());
+                throw e;
+            }
+            if (res.sourceIsJapanese()) break;
+            // someone else's patch, or a saved copy that isn't Japanese after all
+            if (srcF != stockF) {
+                prefs().edit().remove(PREF_ORIGINAL_MD5).apply();
+            } else if (originalFits(stockF, keys, names)) {
+                log("The game's pack is already translated: starting from the saved Japanese pack.");
+                srcF = originalJa();
+                continue;
+            }
+            needJapanese();
+            return;
         }
+        if (srcF == stockF) keepOriginal(stockF, liveMd5);
+        progress(92, "Installing");
         File outF = new File(dir, "patched.__data");
         java.nio.file.Files.write(outF.toPath(), res.data);
-        prefs().edit().putString(PREF_AUTOPATCH_MD5, MasterCrypto.md5Hex(res.data).toLowerCase(Locale.US)).apply();
+        prefs().edit()
+                .putString(PREF_AUTOPATCH_MD5, MasterCrypto.md5Hex(res.data).toLowerCase(Locale.US))
+                .putString(PREF_AUTOPATCH_BASE, MasterCrypto.md5Hex(stock).toLowerCase(Locale.US))
+                .apply();
 
         StringBuilder sum = new StringBuilder("Patched " + res.patched + "/" + res.tablesFound + " tables");
         int missing = names.size() - res.tablesFound;
@@ -1687,13 +2370,15 @@ public class MainActivity extends Activity {
                 .append(" cells left Japanese (new content).");
         log(sum.toString());
 
-        // 7. write back over every live copy
+        // 8. write back over every live copy
         for (String dest : dests) {
             ShellResult rr = shell("cp '" + outF.getAbsolutePath() + "' '" + dest
                     + "' && echo CP_OK; chmod 0666 '" + dest + "' 2>/dev/null");
             if (!rr.out.contains("CP_OK"))
                 throw new AutoPatchFail("could not write " + shortPath(dest) + rr.reason() + ".");
         }
+        syncUi(lang, 93, 99);
+        progress(100, "Installed");
         log("✓ Auto-patch installed to " + dests.size()
                 + (dests.size() == 1 ? " cache location" : " cache locations") + ". Launch the game.");
         doneLabel = lang.isDefault() ? "Auto-patch installed" : lang.name + " auto-patch installed";
